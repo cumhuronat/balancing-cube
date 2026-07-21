@@ -8,8 +8,10 @@ Status legend: [ ] backlog · [~] in progress · [x] done
   balancing (steady wheel-angle offset ⇒ reference-tilt correction via slow
   integrator, Cubli-paper style). Replaces manual `phi_e` tuning; adapts to
   battery shifts. Persist learned trim in NVS.
-- [x] **2. Tap-to-disarm** (validated 2026-07-21; bench-tuned: armed taps ~2 m/s^2, threshold 1.5, window 0.7 s) — double-tap the frame (sharp accel spikes) to
-  gracefully spin down and return to ready; re-armable without power cycle.
+- [x] **2. ~~Tap-to-disarm~~ → Remote stop/land (web + UDP)** — the tap gesture was
+  retired 2026-07-21 (false triggers from wobble chatter, hijacked safety
+  gestures); replaced by http://<cube-ip>/ with STOP/LAND buttons + live
+  status, and UDP "STOP"/"LAND" on port 47270. Seed of dashboard (#5).
 - [x] **3. Soft spin-down on terminate** (validated 2026-07-21: +-360 rad/s to rest in ~2 s) — actively brake wheels to rest after a
   safety cut instead of letting them freewheel for ~20 s.
 - [ ] **4. Black-box flight recorder** — RAM ring buffer of last ~10 s of state at

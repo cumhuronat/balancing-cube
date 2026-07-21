@@ -13,6 +13,7 @@
 #if OTA
   // Libraries related to wireless functionality
   #include <WiFi.h>
+  #include <WebServer.h>
   #include <ESPmDNS.h>
   #include <WiFiUdp.h>
   #include <ArduinoOTA.h>
@@ -50,6 +51,15 @@ TickTwo timer_led(control_led, 200, 0, MILLIS);
 
   // Broadcast a one-line status beacon over UDP once per second
   WiFiUDP status_udp;
+
+  // Command receiver socket and the control web page
+  WiFiUDP cmd_udp;
+  WebServer web(80);
+
+  void handle_root();
+  void handle_stop();
+  void handle_land();
+  void handle_status();
   void send_status();
   TickTwo timer_status(send_status, 1000, 0, MILLIS);
 #endif
@@ -78,12 +88,13 @@ bool flag_spindown = false;
 // Soft-landing state (controlled descent onto a face after a tap)
 bool flag_landing = false;
 
-// Tap-to-disarm detection state
-unsigned int tap_last = 65535; // Cycles since the last registered spike
-unsigned int tap_count = 0;    // Spikes registered inside the current window
-bool tap_high = false;         // Accel deviation is currently above the threshold
-float a_dev_max = 0;           // Peak accel deviation since the last beacon (diagnostics)
-unsigned int tap_edges = 0;    // Spike edges registered since boot (diagnostics)
+// Peak accel deviation since the last beacon (impact diagnostics)
+float a_dev_max = 0;
+
+// Network commands (received over UDP or the web page, consumed by the
+// control cycle)
+bool cmd_stop = false;
+bool cmd_land = false;
 
 // Deferred flash write of the learned trim (never write flash while torque
 // control is active)
@@ -130,6 +141,14 @@ void setup() {
     // delays the boot sequence.
     WiFi.mode(WIFI_STA);
     WiFi.begin(wifi_ssid, wifi_password);
+
+    // Command receiver ("STOP" / "LAND" as UDP payloads) and the web page
+    cmd_udp.begin(47270);
+    web.on("/", handle_root);
+    web.on("/stop", handle_stop);
+    web.on("/land", handle_land);
+    web.on("/status", handle_status);
+    web.begin();
     ArduinoOTA.setHostname("Cube ESP32");
 
     // If an OTA upload starts, disable the motors and latch the controller
@@ -186,9 +205,22 @@ void loop() {
   timer_led.update();
 
   #if OTA
-    // Handle OTA updates and the status beacon
+    // Handle OTA updates, the status beacon, web requests and UDP commands
     timer_ota.update();
     timer_status.update();
+    web.handleClient();
+    if(cmd_udp.parsePacket() > 0) {
+      char cbuf[8];
+      int n = cmd_udp.read(cbuf, 7);
+      if(n > 0) {
+        cbuf[n] = 0;
+        if(strncmp(cbuf, "STOP", 4) == 0) {
+          cmd_stop = true;
+        } else if(strncmp(cbuf, "LAND", 4) == 0) {
+          cmd_land = true;
+        }
+      }
+    }
   #endif
 
   // Persist the learned balance-point trim once the wheels are at rest
@@ -231,6 +263,37 @@ void loop() {
 #endif
 
 #if OTA
+  void handle_root() {
+    web.send(200, "text/html",
+      "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+      "<title>Cube</title><style>body{font-family:sans-serif;text-align:center;background:#111;color:#eee}"
+      "button{font-size:2em;margin:0.4em;padding:0.8em 1.6em;border-radius:12px;border:none}"
+      "#stop{background:#c62828;color:#fff}#land{background:#1565c0;color:#fff}#st{font-size:1.2em;margin:1em}</style>"
+      "</head><body><h2>Balancing Cube</h2><div id='st'>...</div>"
+      "<div><button id='stop' onclick=\"fetch('/stop')\">STOP</button></div>"
+      "<div><button id='land' onclick=\"fetch('/land')\">LAND</button></div>"
+      "<script>setInterval(async()=>{try{document.getElementById('st').textContent="
+      "await(await fetch('/status')).text()}catch(e){}},1000)</script></body></html>");
+  }
+
+  void handle_stop() {
+    cmd_stop = true;
+    web.send(200, "text/plain", "ok");
+  }
+
+  void handle_land() {
+    cmd_land = true;
+    web.send(200, "text/plain", "ok");
+  }
+
+  void handle_status() {
+    char state = flag_terminate ? 'T' : (flag_arm ? 'A' : (flag_landing ? 'L' : (flag_spindown ? 'S' : 'R')));
+    char sbuf[64];
+    snprintf(sbuf, sizeof(sbuf), "%c  phi %.1f deg  wheels %.0f/%.0f/%.0f",
+      state, phi * 180.0 / pi, whe_est_1.omega_w, whe_est_2.omega_w, whe_est_3.omega_w);
+    web.send(200, "text/plain", sbuf);
+  }
+
   void send_status() {
     if(WiFi.status() != WL_CONNECTED) {
       return;
@@ -250,10 +313,11 @@ void loop() {
     }
     char buf[220];
     snprintf(buf, sizeof(buf),
-      "S=%s PHI=%.2f TRIM=%.3f,%.3f,%.3f W=%.1f,%.1f,%.1f AM=%.2f DEV=%.1f TAPS=%u LAND=%.1f,%.1f FUSE=%u",
+      "S=%s PHI=%.2f TRIM=%.3f,%.3f,%.3f W=%.1f,%.1f,%.1f AM=%.2f DEV=%.1f LAND=%.1f,%.1f FUSE=%u TH=%.0f",
       statebuf, phi * 180.0 / pi, trim_x * 180.0 / pi, trim_y * 180.0 / pi, trim_z * 180.0 / pi,
-      whe_est_1.omega_w, whe_est_2.omega_w, whe_est_3.omega_w, att_est.a_mag, a_dev_max, tap_edges,
-      land.peak_omega, land.peak_dev, fuse_total > 0 ? 100 * fuse_count / fuse_total : 0);
+      whe_est_1.omega_w, whe_est_2.omega_w, whe_est_3.omega_w, att_est.a_mag, a_dev_max,
+      land.peak_omega, land.peak_dev, fuse_total > 0 ? 100 * fuse_count / fuse_total : 0,
+      (whe_est_1.theta_w + whe_est_2.theta_w + whe_est_3.theta_w) / 3.0);
     a_dev_max = 0;
     fuse_count = 0;
     fuse_total = 0;
@@ -332,46 +396,36 @@ void controller() {
   // and silently prevent arming forever)
   phi = 2.0 * acos(constrain(qe0, -1.0, 1.0));
 
-  // Tap-to-disarm: two sharp accelerometer-magnitude spikes while balancing
-  // disarm the cube gracefully (spin the wheels down and return to ready).
-  // Such spikes are far outside the fusion validity window, so they never
-  // corrupt the attitude estimate.
-  if(tap_last < 65535) {
-    tap_last++;
-  }
-  // Edge-triggered spike detection runs in every state (so taps can be
-  // exercised and measured with the cube at rest); only the disarm action
-  // below requires the controller to be armed
+  // Track the peak accel deviation for the beacon diagnostics
   float a_dev = abs(att_est.a_mag - g);
   if(a_dev > a_dev_max) {
     a_dev_max = a_dev;
   }
-  bool spike_edge = a_dev > tap_thresh && !tap_high;
-  tap_high = a_dev > tap_thresh;
-  if(spike_edge) {
-    tap_edges++;
+
+  // Network commands. STOP: graceful disarm from any active state (spin the
+  // wheels down, restore the pre-arm state, return to ready). LAND: start
+  // the soft landing (only from quiet balancing).
+  if(cmd_stop) {
+    cmd_stop = false;
+    if(flag_arm || flag_landing) {
+      flag_arm = false;
+      flag_landing = false;
+      flag_spindown = true;
+      phi_lim = phi_min;
+      arm_counter = 0;
+      att_est.set_correction_gain(lds_disarmed);
+      flag_tra = false;
+      att_tra.reset();
+      trim_save_pending = true;
+    }
   }
-  if(flag_arm && abs(phi) < tap_phi_max) {
-    if(spike_edge && tap_last > (unsigned int) tap_refract) {
-      if(tap_count > 0 && tap_last <= (unsigned int) tap_window) {
-        // Second tap inside the window: soft landing. The landing
-        // controller lowers the cube onto a face; the pre-arm state is
-        // restored when the landing ends. The estimator keeps the slow
-        // balancing gain during the descent.
-        flag_arm = false;
-        flag_landing = true;
-        land.start();
-        tap_count = 0;
-      } else {
-        tap_count = 1;
-      }
-      tap_last = 0;
+  if(cmd_land) {
+    cmd_land = false;
+    if(flag_arm && abs(phi) < land_phi_max) {
+      flag_arm = false;
+      flag_landing = true;
+      land.start();
     }
-    if(tap_count > 0 && tap_last > (unsigned int) tap_window) {
-      tap_count = 0;
-    }
-  } else {
-    tap_count = 0;
   }
 
   // Arming qualifier: near the balance orientation, held still, and with a
@@ -408,10 +462,14 @@ void controller() {
       // reference rates)
       float ql0, ql1, ql2, ql3;
       quat_compose_body(qt0, qt1, qt2, qt3, land.lean_x, land.lean_y, land.lean_z, ql0, ql1, ql2, ql3);
+      float theta_mean_l = (whe_est_1.theta_w + whe_est_2.theta_w + whe_est_3.theta_w) / 3.0;
+      float omega_mean_l = (whe_est_1.omega_w + whe_est_2.omega_w + whe_est_3.omega_w) / 3.0;
       cont.control(ql0, ql1, ql2, ql3, att_est.q0, att_est.q1, att_est.q2, att_est.q3,
         0.0, 0.0, 0.0, att_est.omega_x, att_est.omega_y, att_est.omega_z,
-        0.0, 0.0, 0.0, whe_est_1.theta_w, whe_est_2.theta_w, whe_est_3.theta_w,
-        whe_est_1.omega_w, whe_est_2.omega_w, whe_est_3.omega_w);
+        0.0, 0.0, 0.0, whe_est_1.theta_w - theta_mean_l, whe_est_2.theta_w - theta_mean_l,
+        whe_est_3.theta_w - theta_mean_l,
+        whe_est_1.omega_w - omega_mean_l, whe_est_2.omega_w - omega_mean_l,
+        whe_est_3.omega_w - omega_mean_l);
       tau_1 = cont.tau_1;
       tau_2 = cont.tau_2;
       tau_3 = cont.tau_3;
@@ -476,11 +534,21 @@ void controller() {
       vec3_clamp_norm(trim_x, trim_y, trim_z, trim_max);
     }
 
-    // Controller calculates motor torques based on cube and wheel states
+    // Controller calculates motor torques based on cube and wheel states.
+    // The wheel angles AND speeds are fed mean-removed: their common-mode
+    // components are the wheels' collective yaw position/momentum, which
+    // gravity-mediated shedding can never drain, and whose feedback through
+    // the torque matrix is anti-damped (the common-mode speed feeds itself
+    // exponentially). The controller reacts only to the differential parts;
+    // common-mode momentum is left to bearing friction, which damps it.
+    float theta_mean_c = (whe_est_1.theta_w + whe_est_2.theta_w + whe_est_3.theta_w) / 3.0;
+    float omega_mean_c = (whe_est_1.omega_w + whe_est_2.omega_w + whe_est_3.omega_w) / 3.0;
     cont.control(qt0, qt1, qt2, qt3, att_est.q0, att_est.q1, att_est.q2, att_est.q3,
       att_tra.omega_r_x, att_tra.omega_r_y, att_tra.omega_r_z, att_est.omega_x, att_est.omega_y, att_est.omega_z,
-      att_tra.alpha_r_x, att_tra.alpha_r_y, att_tra.alpha_r_z, whe_est_1.theta_w, whe_est_2.theta_w,
-      whe_est_3.theta_w, whe_est_1.omega_w, whe_est_2.omega_w, whe_est_3.omega_w);
+      att_tra.alpha_r_x, att_tra.alpha_r_y, att_tra.alpha_r_z, whe_est_1.theta_w - theta_mean_c,
+      whe_est_2.theta_w - theta_mean_c, whe_est_3.theta_w - theta_mean_c,
+      whe_est_1.omega_w - omega_mean_c, whe_est_2.omega_w - omega_mean_c,
+      whe_est_3.omega_w - omega_mean_c);
 
     // Get motor torques from controller
     tau_1 = cont.tau_1;
