@@ -16,21 +16,14 @@ void Hall::init() {
     Serial.print(pin_speed);
     Serial.print(")... ");
 
-    // Calibrate reading by averaging 100 samples over one second
+    // Calibrate reading by averaging 100 samples over half a second
     for(int i = 0; i < 100; i++) {
         bias += ((float) analogReadMilliVolts(pin_speed) / 1000) / 100;
-        delay(10);
+        delay(5);
     }
 
     // Remove nominal voltage (wheel at rest) from bias calculation
     bias -= 1.65;
-
-    // Flash LED and then disable it
-    digitalWrite(RGB_BUILTIN, LOW);
-    delay(250);
-    neopixelWrite(RGB_BUILTIN, 0, 0, 255);
-    delay(250);
-    digitalWrite(RGB_BUILTIN, LOW);
 
     // Logging
     Serial.print("Done. Offset is ");

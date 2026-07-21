@@ -17,12 +17,9 @@ void ICM20948::init() {
         // Sensor is responding correctly
         Serial.println("ICM20948 is responding.");
 
-        for(int i = 0; i < 3; i++) {
-            digitalWrite(RGB_BUILTIN, HIGH);
-            delay(250);
-            digitalWrite(RGB_BUILTIN, LOW);
-            delay(250);
-        }
+        digitalWrite(RGB_BUILTIN, HIGH);
+        delay(100);
+        digitalWrite(RGB_BUILTIN, LOW);
     } else {
         // Sensor is not responding
         Serial.println("ICM20948 is not responding.");

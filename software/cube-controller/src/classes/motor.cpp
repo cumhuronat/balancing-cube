@@ -22,9 +22,9 @@ Motor::Motor(int pin_enable, int pin_current) : pin_enable(pin_enable), pin_curr
 void Motor::init() {
     // Briefly set current to verify motor behaviour
     set_current(0.5);
-    delay(250);
+    delay(100);
     set_current(-0.4);
-    delay(250);
+    delay(100);
     set_current(0);
 }
 

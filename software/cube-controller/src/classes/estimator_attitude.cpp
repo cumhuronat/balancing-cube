@@ -1,4 +1,5 @@
 #include "estimator_attitude.h"
+#include "../definitions/quat_utils.h"
 
 // Constructor
 AttitudeEstimator::AttitudeEstimator(int pin_sda, int pin_scl) : imu(pin_sda, pin_scl) {
@@ -17,6 +18,13 @@ AttitudeEstimator::AttitudeEstimator(int pin_sda, int pin_scl) : imu(pin_sda, pi
     b_omega_x = 0.0;
     b_omega_y = 0.0;
     b_omega_z = 0.0;
+
+    // Start with the disarmed (fast) correction gain; the .ino reverts it to
+    // lds at the arming instant
+    lds_gain = lds_disarmed;
+
+    // Set initial accelerometer magnitude
+    a_mag = 0.0;
 }
 
 // Initializer
@@ -28,21 +36,31 @@ void AttitudeEstimator::init() {
     calibrate();
 }
 
-// Angular velocity bias calibration 
+// Angular velocity bias calibration and initial attitude
 void AttitudeEstimator::calibrate() {
-    // Calculate angular velocity bias by averaging one thousand samples or 5 seconds worth of gyroscope data
-    // This is done on top of the one-time calibration that was done manually in advance
-    for(int i = 0; i < 1000; i++) {
+    // Average 500 samples (~1 s; IMU output data rate is ~1.1 kHz so 1 ms
+    // spacing yields fresh samples) of gyroscope data for the bias, on top of
+    // the one-time calibration that was done manually in advance. The
+    // accelerometer is averaged in the same loop to seed the attitude.
+    float a_x = 0, a_y = 0, a_z = 0;
+    for(int i = 0; i < 500; i++) {
         // Read sensor values
         imu.read();
 
-        // Add 1/f-th part of the current reading to the bias
-        b_omega_x += imu.gx / 1000;
-        b_omega_y += imu.gy / 1000;
-        b_omega_z += imu.gz / 1000;
+        // Add 1/500th part of the current readings to the averages
+        b_omega_x += imu.gx / 500;
+        b_omega_y += imu.gy / 500;
+        b_omega_z += imu.gz / 500;
+        a_x += imu.ax / 500;
+        a_y += imu.ay / 500;
+        a_z += imu.az / 500;
 
-        delay(5);
+        delay(1);
     }
+
+    // Seed the attitude from averaged gravity so the cube may boot in any
+    // resting pose (yaw is arbitrary here; it is pinned while disarmed)
+    quat_from_accel(a_x, a_y, a_z, q0, q1, q2, q3);
 }
 
 // Estimate step
@@ -63,14 +81,18 @@ void AttitudeEstimator::estimate() {
     float ay = imu.ay;
     float az = imu.az;
 
-    // Normalize linear acceleration
-    float a_norm = sqrt(ax * ax + ay * ay + az * az);
-    ax /= a_norm;
-    ay /= a_norm;
-    az /= a_norm;
+    // Only fuse the accelerometer when it plausibly measures gravity; during
+    // swings or free fall its direction lies and would corrupt the estimate
+    a_mag = sqrt(ax * ax + ay * ay + az * az);
+    if(a_mag >= acc_fuse_lo && a_mag <= acc_fuse_hi) {
+        // Normalize linear acceleration
+        ax /= a_mag;
+        ay /= a_mag;
+        az /= a_mag;
 
-    // Correct step
-    correct(ax, ay, az);
+        // Correct step
+        quat_accel_correct(lds_gain * dt, ax, ay, az, q0, q1, q2, q3);
+    }
 
     // Normalize rotation quaternion
     float q_norm = sqrt(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3);
@@ -80,8 +102,18 @@ void AttitudeEstimator::estimate() {
     q3 /= q_norm;
 }
 
+// Pin the unobservable yaw onto the reference quaternion
+void AttitudeEstimator::pin_yaw(float r0, float r1, float r2, float r3) {
+    quat_pin_yaw(r0, r1, r2, r3, q0, q1, q2, q3);
+}
+
+// Set the accelerometer correction gain
+void AttitudeEstimator::set_correction_gain(float gain) {
+    lds_gain = gain;
+}
+
 // Estimate step
-void AttitudeEstimator::predict(float omega_x, float omega_y, float omega_z) {   
+void AttitudeEstimator::predict(float omega_x, float omega_y, float omega_z) {
     // Predict rotation quaternion time derivative
     float q0_dot = 0.5 * (-q1 * omega_x - q2 * omega_y - q3 * omega_z);
     float q1_dot = 0.5 * ( q0 * omega_x - q3 * omega_y + q2 * omega_z);
@@ -93,38 +125,6 @@ void AttitudeEstimator::predict(float omega_x, float omega_y, float omega_z) {
     q1 += q1_dot * dt;
     q2 += q2_dot * dt;
     q3 += q3_dot * dt;
-}
-
-// Correct step
-void AttitudeEstimator::correct(float ax, float ay, float az) {    
-    // Calculate rotation quaternion measurement
-    float qm0 =  ax * q2 - ay * q1 - az * q0;
-    float qm1 = -ax * q3 - ay * q0 + az * q1;
-    float qm2 =  ax * q0 - ay * q3 + az * q2;
-    float qm3 = -ax * q1 - ay * q2 - az * q3;
-
-    // Calculate rotation quaternion error
-    float qe0 = q0 * qm0 + q1 * qm1 + q2 * qm2 + q3 * qm3;
-    float qe1 = q0 * qm1 - q1 * qm0 - q2 * qm3 + q3 * qm2;
-    float qe2 = q0 * qm2 + q1 * qm3 - q2 * qm0 - q3 * qm1;
-    float qe3 = q0 * qm3 - q1 * qm2 + q2 * qm1 - q3 * qm0;
-
-    // Calculate rotation Gibbs-vector error
-    float se1 = qe1 / qe0;
-    float se2 = qe2 / qe0;
-    float se3 = qe3 / qe0;
-
-    // Calculate rotation quaternion error time derivative
-    float qe0_dot = -q1 * se1 - q2 * se2 - q3 * se3;
-    float qe1_dot =  q0 * se1 - q3 * se2 + q2 * se3;
-    float qe2_dot =  q3 * se1 + q0 * se2 - q1 * se3;
-    float qe3_dot = -q2 * se1 + q1 * se2 + q0 * se3;
-
-    // Correct rotation quaternion
-    q0 += lds * dt * qe0_dot;
-    q1 += lds * dt * qe1_dot;
-    q2 += lds * dt * qe2_dot;
-    q3 += lds * dt * qe3_dot;
 }
 
 float AttitudeEstimator::ax() {

@@ -13,6 +13,11 @@ void WheelEstimator::init() {
     hall.init();
 }
 
+// Zero the integrated wheel angle
+void WheelEstimator::reset_theta() {
+    theta_w = 0.0;
+}
+
 // Estimate step
 void WheelEstimator::estimate(float tau) {
     // Predict step

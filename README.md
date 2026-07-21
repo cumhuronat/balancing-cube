@@ -16,6 +16,7 @@ A YouTube video demonstrating the balancing cube is available [here](https://you
 
 This repository should contain everything you need to order and/or build parts for this cube. Take into account the following:
 
+* Startup: power the cube on in any resting pose (it no longer needs to boot lying flat); it is ready about four seconds later (solid red LED). Place it on its corner at any heading and hold it still near the balance point — it arms and starts balancing about half a second later. There is no need to rotate it to a special orientation.
 * I replaced four of the eight 16AWG wires in each cable assembly by 22AWG wires since only four wires carry large currents. The others carry +5V and hall sensor signals. This reduces weight and makes the cables easier to handle, as well as reducing strain on the mating connectors. The motor connection is rather fragile and might break if stressed too much.
 * The ESP32 board does not go into flashing mode automatically. I fixed this by adding a 10 uF capacitor between the enable and reset pin, as described [here](https://randomnerdtutorials.com/solved-failed-to-connect-to-esp32-timed-out-waiting-for-packet-header/).
 * In my blog post, I describe some errors in the design of the motherboard. These have been resolved in the files that are available in this repository.

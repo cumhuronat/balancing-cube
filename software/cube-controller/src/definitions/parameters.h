@@ -60,6 +60,19 @@ const float m_c_bar_g_l = m_c_bar * g * l;
 const float lds = 1; // How much do you trust the accelerometer compared to the gyroscope? This gain determines that.
 const float ldw = 150; // How much do you trust the hall sensor compared to the wheel model? This gain determines that.
 
+// Arming qualifier and disarmed-estimator parameters. While disarmed the
+// accelerometer correction runs at lds_disarmed for fast settling and the
+// estimate's unobservable yaw is pinned to the reference; arming additionally
+// requires the cube to be held still with a plausible gravity reading for
+// arm_dwell consecutive cycles.
+const float lds_disarmed = 10; // Accelerometer correction gain while disarmed
+const float omega_still = 0.3; // Maximum gyro magnitude that counts as "held still" (rad/s)
+const float acc_arm_lo = 0.9 * g; // Accelerometer magnitude window for arming (m/s^2)
+const float acc_arm_hi = 1.1 * g;
+const float acc_fuse_lo = 0.85 * g; // Accelerometer magnitude window for fusing the correction step (m/s^2)
+const float acc_fuse_hi = 1.15 * g;
+const int arm_dwell = 50; // Consecutive qualifying cycles required to arm (50 cycles = 0.2 s)
+
 // Controller gains. These must be re-tuned if your cube has different dynamics (weights, inertias, dimensions, etc.)
 const float kp = 300;
 const float kd = 40;
@@ -101,6 +114,9 @@ const float qu2_qu3 = qu2 * qu3;
 const float qu3_qu3 = qu3 * qu3;
 
 // Minimum and maximum error limits (for control safety)
+// phi_min bounds TILT at arming (yaw is pinned away while disarmed). Do not
+// widen it: per-wheel torque is Km * ia_max = 0.216 Nm against a gravity
+// torque of ~2.13 * sin(tilt) Nm, which caps recoverable tilt at ~8-10 deg.
 const float phi_min = 5.0 * pi / 180.0;
 const float phi_max = 40.0 * pi / 180.0;
 
