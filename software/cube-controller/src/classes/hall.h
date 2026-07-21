@@ -14,6 +14,9 @@ class Hall {
         void init();
         // Read angular velocity
         void read();
+        // Slowly re-zero the bias against the current reading (call only with
+        // the wheel at rest and the motor disabled)
+        void rezero();
         // Angular velocity (rad/s)
         float omega;
 

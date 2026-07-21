@@ -13,6 +13,11 @@ void WheelEstimator::init() {
     hall.init();
 }
 
+// Re-zero the hall bias while the wheel is at rest
+void WheelEstimator::rezero_hall() {
+    hall.rezero();
+}
+
 // Zero the integrated wheel angle
 void WheelEstimator::reset_theta() {
     theta_w = 0.0;

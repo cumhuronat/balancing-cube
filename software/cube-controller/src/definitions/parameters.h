@@ -91,11 +91,20 @@ const int att_sane_cycles = 125; // Sustained disagreement cycles before forced 
 // instead of freewheeling for tens of seconds
 const float ia_brake = 3.0; // Braking current magnitude during spin-down (A)
 const float omega_stop = 5.0; // Wheel speed below which spin-down completes (rad/s)
+const float omega_brake_max = 330.0; // Above this wheel speed braking is ineffective (back-EMF
+                                     // ~ Km*omega approaches the supply voltage and the ESCON
+                                     // cannot regenerate): coast first, then brake
+const float hall_rezero_rate = 0.002; // Disarmed-at-rest hall bias re-zeroing rate (fraction per cycle
+                                     // of the residual reading); heals a hall calibration taken
+                                     // before the ESCON outputs fully settled
 
 // Tap-to-disarm: two sharp accelerometer spikes while balancing disarm the
 // cube gracefully (times expressed in control cycles at f = 250 Hz)
 const float tap_thresh = 1.5; // Accel-magnitude deviation registering as a tap (m/s^2). Bench-measured: armed taps reach 1.9-2.7 (the balancing cube yields, halving the peak vs at-rest taps at 3.7-6); balancing background stays below ~0.8.
 const int tap_window = 175; // Maximum cycles between the two taps (0.7 s)
+const float tap_phi_max = 15.0 * pi / 180.0; // Taps only count near balance: a tilted cube must
+                                             // reach the terminate path, not a tap disarm
+
 const int tap_refract = 20; // Cycles ignored after a registered spike (0.08 s)
 
 // Status beacon: broadcast while balancing too (one bounded UDP send per

@@ -97,6 +97,9 @@ Preferences prefs;
 // Trimmed reference quaternion (trajectory reference with the trim composed)
 float qt0 = 1, qt1 = 0, qt2 = 0, qt3 = 0;
 
+// Hall re-zero rest dwell counter
+unsigned int hall_rest = 0;
+
 // Armed-phase attitude watchdog and fusion diagnostics
 unsigned int att_sane_count = 0;
 unsigned int fuse_count = 0;
@@ -348,7 +351,7 @@ void controller() {
   if(spike_edge) {
     tap_edges++;
   }
-  if(flag_arm) {
+  if(flag_arm && abs(phi) < tap_phi_max) {
     if(spike_edge && tap_last > (unsigned int) tap_refract) {
       if(tap_count > 0 && tap_last <= (unsigned int) tap_window) {
         // Second tap inside the window: soft landing. The landing
@@ -486,12 +489,18 @@ void controller() {
   } else {
     if(flag_spindown) {
       // Actively brake the wheels to rest instead of letting them freewheel
+      // Staged braking: above omega_brake_max the back-EMF defeats the ESCON
+      // (it cannot regenerate into the supply), so coast until braking can
+      // actually bite, then brake hard
       float sign_1 = (0.0 < whe_est_1.omega_w) - (whe_est_1.omega_w < 0.0);
       float sign_2 = (0.0 < whe_est_2.omega_w) - (whe_est_2.omega_w < 0.0);
       float sign_3 = (0.0 < whe_est_3.omega_w) - (whe_est_3.omega_w < 0.0);
-      tau_1 = abs(whe_est_1.omega_w) > omega_stop ? -sign_1 * ia_brake * Km : 0.0;
-      tau_2 = abs(whe_est_2.omega_w) > omega_stop ? -sign_2 * ia_brake * Km : 0.0;
-      tau_3 = abs(whe_est_3.omega_w) > omega_stop ? -sign_3 * ia_brake * Km : 0.0;
+      float mag_1 = abs(whe_est_1.omega_w);
+      float mag_2 = abs(whe_est_2.omega_w);
+      float mag_3 = abs(whe_est_3.omega_w);
+      tau_1 = mag_1 > omega_stop && mag_1 <= omega_brake_max ? -sign_1 * ia_brake * Km : 0.0;
+      tau_2 = mag_2 > omega_stop && mag_2 <= omega_brake_max ? -sign_2 * ia_brake * Km : 0.0;
+      tau_3 = mag_3 > omega_stop && mag_3 <= omega_brake_max ? -sign_3 * ia_brake * Km : 0.0;
 
       // Spin-down completes once all three wheels are near rest
       if(abs(whe_est_1.omega_w) <= omega_stop && abs(whe_est_2.omega_w) <= omega_stop &&
@@ -506,6 +515,19 @@ void controller() {
       tau_1 = 0.0;
       tau_2 = 0.0;
       tau_3 = 0.0;
+
+      // With the wheels at rest and motors off for a sustained stretch,
+      // slowly heal the hall bias against the actual readings (the boot
+      // calibration can be slightly off; a residual bias ramps the wheel
+      // angles while balancing and poisons the auto-trim)
+      bool wheels_rest = abs(whe_est_1.omega()) < 3.0 && abs(whe_est_2.omega()) < 3.0 &&
+        abs(whe_est_3.omega()) < 3.0;
+      hall_rest = wheels_rest ? hall_rest + 1 : 0;
+      if(hall_rest > (unsigned int) f) {
+        whe_est_1.rezero_hall();
+        whe_est_2.rezero_hall();
+        whe_est_3.rezero_hall();
+      }
     }
 
     // Disarm mechanism (safety terminate also brakes the wheels to rest)

@@ -31,6 +31,14 @@ void Hall::init() {
     Serial.println(" V.");
 }
 
+// Slowly re-zero the bias against the current reading. The boot calibration
+// samples the ESCON analog output ~1.5 s after power-up; if that output had
+// not fully settled, the residual bias makes wheel angles ramp while idle and
+// poisons everything that integrates them. This heals it continuously.
+void Hall::rezero() {
+    bias += hall_rezero_rate * omega * 30.0 / pi / 13000 * 2.7 * -1;
+}
+
 // Read angular velocity
 void Hall::read() {
     // Read voltage using ADC (with 12-bit resolution)
