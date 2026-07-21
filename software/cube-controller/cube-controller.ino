@@ -59,6 +59,7 @@ TickTwo timer_led(control_led, 200, 0, MILLIS);
   void handle_root();
   void handle_stop();
   void handle_land();
+  void handle_spin();
   void handle_status();
   void send_status();
   TickTwo timer_status(send_status, 1000, 0, MILLIS);
@@ -95,6 +96,14 @@ float a_dev_max = 0;
 // control cycle)
 bool cmd_stop = false;
 bool cmd_land = false;
+
+// Pirouette (spin trajectory) toggle. spin_enabled is the user's wish
+// (web-toggleable, persisted); spin_active is whether the trajectory is
+// currently running - a disable only takes effect in a rest phase with the
+// reference back at the base pose, so the reference never jumps
+bool spin_enabled = true;
+bool spin_active = false;
+bool spin_save_pending = false;
 
 // Deferred flash write of the learned trim (never write flash while torque
 // control is active)
@@ -134,6 +143,7 @@ void setup() {
   trim_y = prefs.getFloat("trim_y", 0.0);
   trim_z = prefs.getFloat("trim_z", 0.0);
   vec3_clamp_norm(trim_x, trim_y, trim_z, trim_max);
+  spin_enabled = prefs.getBool("spin", true);
 
   #if OTA
     // Start the WiFi connection in the background. OTA is brought up by the
@@ -147,6 +157,7 @@ void setup() {
     web.on("/", handle_root);
     web.on("/stop", handle_stop);
     web.on("/land", handle_land);
+    web.on("/spin", handle_spin);
     web.on("/status", handle_status);
     web.begin();
     ArduinoOTA.setHostname("Cube ESP32");
@@ -231,6 +242,10 @@ void loop() {
     prefs.putFloat("trim_z", trim_z);
     trim_save_pending = false;
   }
+  if(spin_save_pending && !flag_arm && !flag_spindown) {
+    prefs.putBool("spin", spin_enabled);
+    spin_save_pending = false;
+  }
 }
 
 #if OTA
@@ -272,6 +287,7 @@ void loop() {
       "</head><body><h2>Balancing Cube</h2><div id='st'>...</div>"
       "<div><button id='stop' onclick=\"fetch('/stop')\">STOP</button></div>"
       "<div><button id='land' onclick=\"fetch('/land')\">LAND</button></div>"
+      "<div><button id='spin' onclick=\"fetch('/spin')\" style='background:#6a1b9a;color:#fff'>SPIN ON/OFF</button></div>"
       "<script>setInterval(async()=>{try{document.getElementById('st').textContent="
       "await(await fetch('/status')).text()}catch(e){}},1000)</script></body></html>");
   }
@@ -286,11 +302,18 @@ void loop() {
     web.send(200, "text/plain", "ok");
   }
 
+  void handle_spin() {
+    spin_enabled = !spin_enabled;
+    spin_save_pending = true;
+    web.send(200, "text/plain", spin_enabled ? "spin on" : "spin off");
+  }
+
   void handle_status() {
     char state = flag_terminate ? 'T' : (flag_arm ? 'A' : (flag_landing ? 'L' : (flag_spindown ? 'S' : 'R')));
-    char sbuf[64];
-    snprintf(sbuf, sizeof(sbuf), "%c  phi %.1f deg  wheels %.0f/%.0f/%.0f",
-      state, phi * 180.0 / pi, whe_est_1.omega_w, whe_est_2.omega_w, whe_est_3.omega_w);
+    char sbuf[80];
+    snprintf(sbuf, sizeof(sbuf), "%c  phi %.1f deg  wheels %.0f/%.0f/%.0f  spin %s",
+      state, phi * 180.0 / pi, whe_est_1.omega_w, whe_est_2.omega_w, whe_est_3.omega_w,
+      spin_enabled ? "on" : "off");
     web.send(200, "text/plain", sbuf);
   }
 
@@ -510,8 +533,26 @@ void controller() {
     if(!flag_tra) {
       flag_tra = true;
       att_tra.init();
+      spin_active = spin_enabled;
     }
-    att_tra.generate();
+    if(spin_active) {
+      att_tra.generate();
+
+      // A pending disable is honored only in a rest phase with the reference
+      // at the base pose (quaternion dot near +1: excludes the mid-cycle
+      // rest, where the 2 pi rotation leaves qr at -qu and a snap back to
+      // +qu would read as a 360 degree error and terminate)
+      float orm_s = abs(att_tra.omega_r_x) + abs(att_tra.omega_r_y) + abs(att_tra.omega_r_z);
+      float dot_s = qu0 * att_tra.qr0 + qu1 * att_tra.qr1 + qu2 * att_tra.qr2 + qu3 * att_tra.qr3;
+      if(!spin_enabled && orm_s < 0.01 && dot_s > 0.9999) {
+        att_tra.reset();
+        spin_active = false;
+      }
+    } else if(spin_enabled) {
+      // Re-enable starts a fresh trajectory (leading rest phase, no jump)
+      att_tra.init();
+      spin_active = true;
+    }
 
     // Recompute the trimmed reference from the freshly generated trajectory
     quat_compose_body(att_tra.qr0, att_tra.qr1, att_tra.qr2, att_tra.qr3, trim_x, trim_y, trim_z,
