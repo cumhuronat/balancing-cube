@@ -128,4 +128,44 @@ static inline bool quat_pin_yaw(float qu0, float qu1, float qu2, float qu3,
     return true;
 }
 
+
+// Compose a small body-frame rotation (rotation vector rx, ry, rz in rad)
+// onto the right side of a reference quaternion: out = q (x) exp(r/2).
+// Used to apply the learned auto-trim to the trajectory reference; a
+// body-frame (right-side) composition stays correct through the yaw spin
+// trajectory. Output is renormalized.
+static inline void quat_compose_body(float q0, float q1, float q2, float q3,
+        float rx, float ry, float rz, float& o0, float& o1, float& o2, float& o3) {
+    float ang = sqrtf(rx * rx + ry * ry + rz * rz);
+    float w = 1.0f, x = 0.0f, y = 0.0f, z = 0.0f;
+    if (ang > 1e-9f) {
+        float h = ang * 0.5f;
+        float s = sinf(h) / ang;
+        w = cosf(h);
+        x = rx * s;
+        y = ry * s;
+        z = rz * s;
+    }
+    o0 = q0 * w - q1 * x - q2 * y - q3 * z;
+    o1 = q0 * x + q1 * w + q2 * z - q3 * y;
+    o2 = q0 * y - q1 * z + q2 * w + q3 * x;
+    o3 = q0 * z + q1 * y - q2 * x + q3 * w;
+    float n = sqrtf(o0 * o0 + o1 * o1 + o2 * o2 + o3 * o3);
+    o0 /= n;
+    o1 /= n;
+    o2 /= n;
+    o3 /= n;
+}
+
+// Clamp the norm of a 3-vector in place (used to bound the auto-trim angle)
+static inline void vec3_clamp_norm(float& x, float& y, float& z, float max_norm) {
+    float n = sqrtf(x * x + y * y + z * z);
+    if (n > max_norm) {
+        float f = max_norm / n;
+        x *= f;
+        y *= f;
+        z *= f;
+    }
+}
+
 #endif

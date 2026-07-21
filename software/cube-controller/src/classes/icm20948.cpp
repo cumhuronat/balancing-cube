@@ -36,8 +36,12 @@ void ICM20948::init() {
     imu.setAccRange(ICM20948_ACC_RANGE_2G);
     imu.setGyrRange(ICM20948_GYRO_RANGE_2000);
     
-    // Configure digital low-pass filter (DLPF)
-    imu.setAccDLPF(ICM20948_DLPF_6);
+    // Configure digital low-pass filters. The gyroscope keeps the narrow
+    // filter (the controller's rate damping depends on it). The accelerometer
+    // uses a ~50 Hz filter: wide enough that a finger tap on the frame
+    // survives for the tap-to-disarm detector, while the estimator stays
+    // protected by the fusion validity window and its slow correction gain.
+    imu.setAccDLPF(ICM20948_DLPF_3);
     imu.setGyrDLPF(ICM20948_DLPF_6);
     
     // Disable divider to get maximum possible output data rate (approximately 1.1 kHz)

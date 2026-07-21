@@ -1,6 +1,7 @@
 // Include definitions
 #include "definitions/parameters.h"
 #include "definitions/pins.h"
+#include "definitions/quat_utils.h"
 
 // Include drivers
 #include "classes/hall.h"

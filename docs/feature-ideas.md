@@ -4,20 +4,20 @@ Status legend: [ ] backlog · [~] in progress · [x] done
 
 ## Quick wins
 
-- [~] **1. Auto-trim balance point** — learn the true center-of-mass offset while
+- [x] **1. Auto-trim balance point** (validated 2026-07-21: converges in ~60 s to ~2.4 deg, persists in NVS, pre-loads on boot) — learn the true center-of-mass offset while
   balancing (steady wheel-angle offset ⇒ reference-tilt correction via slow
   integrator, Cubli-paper style). Replaces manual `phi_e` tuning; adapts to
   battery shifts. Persist learned trim in NVS.
-- [~] **2. Tap-to-disarm** — double-tap the frame (sharp accel spikes) to
+- [x] **2. Tap-to-disarm** (validated 2026-07-21; bench-tuned: armed taps ~2 m/s^2, threshold 1.5, window 0.7 s) — double-tap the frame (sharp accel spikes) to
   gracefully spin down and return to ready; re-armable without power cycle.
-- [~] **3. Soft spin-down on terminate** — actively brake wheels to rest after a
+- [x] **3. Soft spin-down on terminate** (validated 2026-07-21: +-360 rad/s to rest in ~2 s) — actively brake wheels to rest after a
   safety cut instead of letting them freewheel for ~20 s.
 - [ ] **4. Black-box flight recorder** — RAM ring buffer of last ~10 s of state at
   250 Hz, dumped over WiFi after terminate. Turns falls into data.
 
 ## Medium
 
-- [ ] **5. Web dashboard + live tuning** — cube serves a page: live attitude,
+- [ ] **5. Web dashboard + live tuning** (seed exists: 1 Hz UDP status beacon on port 47269) — cube serves a page: live attitude,
   wheel speeds, editable gains persisted to NVS, remote kill. No reflash tuning.
 - [ ] **6. Auto mode detection** — one firmware for corner AND edge balancing:
   detect the nearest equilibrium manifold at arming, run matching controller

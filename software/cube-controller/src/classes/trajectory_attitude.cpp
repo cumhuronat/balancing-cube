@@ -33,6 +33,37 @@ AttitudeTrajectory::AttitudeTrajectory() {
     cra = 0.0;
 }
 
+// Reset to the initial state (mirrors the constructor)
+void AttitudeTrajectory::reset() {
+    // Initial reference quaternion
+    qr0 = qu0;
+    qr1 = qu1;
+    qr2 = qu2;
+    qr3 = qu3;
+
+    // Reference angular velocities and accelerations for cube
+    omega_r_x = 0.0;
+    omega_r_y = 0.0;
+    omega_r_z = 0.0;
+    alpha_r_x = 0.0;
+    alpha_r_y = 0.0;
+    alpha_r_z = 0.0;
+
+    // Algorithm flags
+    flag_rot1 = true;
+    flag_res1 = true;
+    flag_rot2 = true;
+    flag_res2 = true;
+
+    // Position and its derivatives
+    pos = 0.0;
+    vel = 0.0;
+    acc = 0.0;
+    jer = 0.0;
+    sna = 0.0;
+    cra = 0.0;
+}
+
 // Initializer
 void AttitudeTrajectory::init() {
     // Start timer

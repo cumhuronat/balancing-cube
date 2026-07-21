@@ -73,6 +73,29 @@ const float acc_fuse_lo = 0.85 * g; // Accelerometer magnitude window for fusing
 const float acc_fuse_hi = 1.15 * g;
 const int arm_dwell = 50; // Consecutive qualifying cycles required to arm (50 cycles = 0.2 s)
 
+// Wheel spin-down: after a disarm or terminate the wheels are braked to rest
+// instead of freewheeling for tens of seconds
+const float ia_brake = 3.0; // Braking current magnitude during spin-down (A)
+const float omega_stop = 5.0; // Wheel speed below which spin-down completes (rad/s)
+
+// Tap-to-disarm: two sharp accelerometer spikes while balancing disarm the
+// cube gracefully (times expressed in control cycles at f = 250 Hz)
+const float tap_thresh = 1.5; // Accel-magnitude deviation registering as a tap (m/s^2). Bench-measured: armed taps reach 1.9-2.7 (the balancing cube yields, halving the peak vs at-rest taps at 3.7-6); balancing background stays below ~0.8.
+const int tap_window = 175; // Maximum cycles between the two taps (0.7 s)
+const int tap_refract = 20; // Cycles ignored after a registered spike (0.08 s)
+
+// Status beacon: broadcast while balancing too (one bounded UDP send per
+// second on the control path, comparable to the existing armed-phase OTA
+// polling; set to false after auto-trim has been validated if preferred)
+const bool status_while_armed = true;
+
+// Auto-trim of the balance point: a persistent wheel-angle offset is the
+// signature of a center-of-mass mismatch and is slowly bled into a body-frame
+// trim of the reference quaternion (learned value persisted in flash)
+const float trim_rate = 3e-6; // Trim integrator rate (rad trim per rad wheel angle per s)
+const float trim_max = 3.0 * pi / 180.0; // Trim clamp (rad)
+const float phi_quiet = 8.0 * pi / 180.0; // Adapt only below this error angle (rad)
+
 // Controller gains. These must be re-tuned if your cube has different dynamics (weights, inertias, dimensions, etc.)
 const float kp = 300;
 const float kd = 40;

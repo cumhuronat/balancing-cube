@@ -14,6 +14,8 @@ class AttitudeTrajectory {
         void init();
         // Generate step
         void generate();
+        // Reset to the initial (pre-arm) state so the trajectory can restart
+        void reset();
         //
         float qr0, qr1, qr2, qr3;
         //

@@ -250,6 +250,48 @@ static void test_pin_yaw_guard() {
     expect(q0 == q.w && q1 == q.x && q2 == q.y && q3 == q.z, "degenerate configuration leaves q untouched");
 }
 
+
+// --- quat_compose_body / vec3_clamp_norm tests (auto-trim math) ---
+
+static void test_compose_body_matches_qmul() {
+    for (int trial = 0; trial < 50; trial++) {
+        Quat q = qrand();
+        float rx = 0.1f * frand(), ry = 0.1f * frand(), rz = 0.1f * frand();
+        float ang = sqrtf(rx*rx + ry*ry + rz*rz);
+        Quat r = {1.0f, 0.0f, 0.0f, 0.0f};
+        if (ang > 1e-9f) {
+            float s = sinf(ang / 2.0f) / ang;
+            r = {cosf(ang / 2.0f), rx*s, ry*s, rz*s};
+        }
+        Quat want = qmul(q, r);
+        float o0, o1, o2, o3;
+        quat_compose_body(q.w, q.x, q.y, q.z, rx, ry, rz, o0, o1, o2, o3);
+        float d = fabsf(o0-want.w) + fabsf(o1-want.x) + fabsf(o2-want.y) + fabsf(o3-want.z);
+        expect(d < 1e-5f, "compose_body equals right-multiplied Hamilton product");
+        float n = sqrtf(o0*o0 + o1*o1 + o2*o2 + o3*o3);
+        expect(fabsf(n - 1.0f) < 1e-5f, "compose_body preserves unit norm");
+    }
+}
+
+static void test_compose_body_zero_is_identity() {
+    Quat q = qrand();
+    float o0, o1, o2, o3;
+    quat_compose_body(q.w, q.x, q.y, q.z, 0.0f, 0.0f, 0.0f, o0, o1, o2, o3);
+    expect(o0 == q.w && o1 == q.x && o2 == q.y && o3 == q.z, "zero trim leaves reference untouched");
+}
+
+static void test_vec3_clamp_norm() {
+    float x = 3.0f, y = 4.0f, z = 0.0f;      // norm 5
+    vec3_clamp_norm(x, y, z, 1.0f);
+    float n = sqrtf(x*x + y*y + z*z);
+    expect(fabsf(n - 1.0f) < 1e-6f, "over-limit vector clamps to max norm");
+    expect(fabsf(x/y - 3.0f/4.0f) < 1e-5f, "clamp preserves direction");
+    float a = 0.01f, b = -0.02f, c = 0.005f;
+    float a0 = a, b0 = b, c0 = c;
+    vec3_clamp_norm(a, b, c, 1.0f);
+    expect(a == a0 && b == b0 && c == c0, "under-limit vector is untouched");
+}
+
 int main() {
     test_from_accel_matches_gravity();
     test_from_accel_degenerate_upside_down();
@@ -260,6 +302,9 @@ int main() {
     test_pin_yaw();
     test_pin_yaw_double_cover();
     test_pin_yaw_guard();
+    test_compose_body_matches_qmul();
+    test_compose_body_zero_is_identity();
+    test_vec3_clamp_norm();
     printf("OK (%d checks)\n", checks);
     return 0;
 }
