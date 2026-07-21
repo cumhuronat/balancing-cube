@@ -37,9 +37,11 @@ void WheelEstimator::estimate(float tau) {
 
 // Predict step
 void WheelEstimator::predict(float tau) {
-    // Calculate friction torque
-    float sign = (0.0 < omega_w) - (omega_w < 0.0);
-    float tau_f = sign * (tau_c + bw * abs(omega_w));
+    // Calculate friction torque (smoothed Coulomb term, matching the
+    // controller's feedforward so model and plant stay consistent)
+    float sf = omega_w / omega_fric;
+    if(sf > 1.0) { sf = 1.0; } else if(sf < -1.0) { sf = -1.0; }
+    float tau_f = sf * tau_c + bw * omega_w;
 
     // Calculate angular acceleration
     omega_w_dot = (1.0 / I_w_xx) * (-tau_f + tau);

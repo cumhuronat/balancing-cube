@@ -92,6 +92,9 @@ bool flag_landing = false;
 // Peak accel deviation since the last beacon (impact diagnostics)
 float a_dev_max = 0;
 
+// Peak armed error angle since the last beacon (wobble metric)
+float phi_pk = 0;
+
 // Network commands (received over UDP or the web page, consumed by the
 // control cycle)
 bool cmd_stop = false;
@@ -336,12 +339,13 @@ void loop() {
     }
     char buf[220];
     snprintf(buf, sizeof(buf),
-      "S=%s PHI=%.2f TRIM=%.3f,%.3f,%.3f W=%.1f,%.1f,%.1f AM=%.2f DEV=%.1f LAND=%.1f,%.1f FUSE=%u TH=%.0f B=" __TIME__,
-      statebuf, phi * 180.0 / pi, trim_x * 180.0 / pi, trim_y * 180.0 / pi, trim_z * 180.0 / pi,
+      "S=%s PHI=%.2f PHIPK=%.2f TRIM=%.3f,%.3f,%.3f W=%.1f,%.1f,%.1f AM=%.2f DEV=%.1f LAND=%.1f,%.1f FUSE=%u TH=%.0f B=" __TIME__,
+      statebuf, phi * 180.0 / pi, phi_pk * 180.0 / pi, trim_x * 180.0 / pi, trim_y * 180.0 / pi, trim_z * 180.0 / pi,
       whe_est_1.omega_w, whe_est_2.omega_w, whe_est_3.omega_w, att_est.a_mag, a_dev_max,
       land.peak_omega, land.peak_dev, fuse_total > 0 ? 100 * fuse_count / fuse_total : 0,
       (whe_est_1.theta_w + whe_est_2.theta_w + whe_est_3.theta_w) / 3.0);
     a_dev_max = 0;
+    phi_pk = 0;
     fuse_count = 0;
     fuse_total = 0;
     status_udp.beginPacket("255.255.255.255", 47269);
@@ -423,10 +427,13 @@ void controller() {
   // and silently prevent arming forever)
   phi = 2.0 * acos(constrain(qe0, -1.0, 1.0));
 
-  // Track the peak accel deviation for the beacon diagnostics
+  // Track the peak accel deviation and armed error angle for the beacon
   float a_dev = abs(att_est.a_mag - g);
   if(a_dev > a_dev_max) {
     a_dev_max = a_dev;
+  }
+  if(flag_arm && abs(phi) > phi_pk) {
+    phi_pk = abs(phi);
   }
 
   // Network commands. STOP: graceful disarm from any active state (spin the

@@ -97,13 +97,18 @@ void AttitudeWheelController::state_regulator(float qr0, float qr1, float qr2, f
 // Feedback linearization step
 void AttitudeWheelController::feedback_linearization(float q0, float q1, float q2, float q3, float omega_x, 
         float omega_y, float omega_z, float omega_1, float omega_2, float omega_3) {
-    // Calculate friction torque
-    float sign_1 = (0.0 < omega_1) - (omega_1 < 0.0);
-    float sign_2 = (0.0 < omega_2) - (omega_2 < 0.0);
-    float sign_3 = (0.0 < omega_3) - (omega_3 < 0.0);
-    tau_f_1 = sign_1 * (tau_c + bw * abs(omega_1));
-    tau_f_2 = sign_2 * (tau_c + bw * abs(omega_2));
-    tau_f_3 = sign_3 * (tau_c + bw * abs(omega_3));
+    // Calculate friction torque with a smoothed Coulomb term (the hard sign
+    // dithers near zero wheel speed and excites a visible limit cycle);
+    // sign * bw * |omega| equals bw * omega exactly
+    float s_1 = omega_1 / omega_fric;
+    float s_2 = omega_2 / omega_fric;
+    float s_3 = omega_3 / omega_fric;
+    if(s_1 > 1.0) { s_1 = 1.0; } else if(s_1 < -1.0) { s_1 = -1.0; }
+    if(s_2 > 1.0) { s_2 = 1.0; } else if(s_2 < -1.0) { s_2 = -1.0; }
+    if(s_3 > 1.0) { s_3 = 1.0; } else if(s_3 < -1.0) { s_3 = -1.0; }
+    tau_f_1 = s_1 * tau_c + bw * omega_1;
+    tau_f_2 = s_2 * tau_c + bw * omega_2;
+    tau_f_3 = s_3 * tau_c + bw * omega_3;
 
     // Auxiliary variable to avoid computing the same term multiple times
     float omega_x_omega_y_omega_z = omega_x + omega_y + omega_z;

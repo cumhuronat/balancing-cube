@@ -40,6 +40,10 @@ const float omega_nl = 6250 * pi / 30; // No load speed (rad/s)
 // Mechanical motor properties
 const float tau_c = 3.4e-3; // Coulomb friction torque (Nm)
 const float bw = 1.513e-5; // Rotational viscous friction coefficient (Nms/rad)
+const float omega_fric = 2.0; // Friction feedforward smoothing halfwidth (rad/s): a hard
+                              // sign(omega) flips +-tau_c at every zero crossing, and with the
+                              // wheels idling near zero it dithers the loop at its limit-cycle
+                              // frequency (the ~2 Hz visible wobble)
 
 // Structure properties
 const float l = 0.15; // Structure side length (m)
