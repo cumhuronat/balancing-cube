@@ -83,7 +83,11 @@ const int arm_dwell = 50; // Consecutive qualifying cycles required to arm (50 c
 // attitude watchdog force-terminates when a clean gravity measurement
 // disagrees with the estimate for att_sane_cycles (a fallen cube must never
 // keep its motors energized because the estimator went blind).
-const float yaw_leak_tau = 15.0; // Yaw leak time constant while armed (s)
+const float yaw_leak_tau = 2.0; // Yaw leak time constant while armed (s). Fast on purpose: the
+                                // standing yaw error it leaves (bias * tau) sets the persistent yaw
+                                // torque the controller injects into common-mode wheel momentum, and
+                                // the corner-friction exit for that momentum is tiny. The leak pauses
+                                // during commanded spins so it cannot eat the pirouette.
 const float att_sane_ang = 45.0 * pi / 180.0; // Estimate-vs-gravity disagreement threshold (rad). Below the corner-to-face geometry (54.7 deg) so a face-fall with a blind estimator trips it; healthy estimator error is a few degrees.
 const int att_sane_cycles = 125; // Sustained disagreement cycles before forced terminate (0.5 s)
 
@@ -155,6 +159,11 @@ const float lean_quiet = 0.4; // Body rate below which the pre-lean settle compl
 const int lean_settle = 50; // Consecutive quiet cycles required before leaning (0.2 s)
 const int progress_stall = 125; // Cycles without waypoint progress before bailing (0.5 s)
 const int hold_cycles = 375; // Nominal balanced-pause duration in cycles (1.5 s)
+
+// Common-mode wheel momentum drain: equal deceleration on all three wheels,
+// reacted by the corner's static ground friction (the only path that can shed
+// yaw-direction momentum). Time constant ~ I_w_xx / k_cm_drain ~ 3 s.
+const float k_cm_drain = 1.5e-4; // Drain gain (Nm per rad/s of common-mode wheel speed)
 
 // Controller gains. These must be re-tuned if your cube has different dynamics (weights, inertias, dimensions, etc.)
 const float kp = 300;

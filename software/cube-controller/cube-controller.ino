@@ -336,7 +336,7 @@ void loop() {
     }
     char buf[220];
     snprintf(buf, sizeof(buf),
-      "S=%s PHI=%.2f TRIM=%.3f,%.3f,%.3f W=%.1f,%.1f,%.1f AM=%.2f DEV=%.1f LAND=%.1f,%.1f FUSE=%u TH=%.0f",
+      "S=%s PHI=%.2f TRIM=%.3f,%.3f,%.3f W=%.1f,%.1f,%.1f AM=%.2f DEV=%.1f LAND=%.1f,%.1f FUSE=%u TH=%.0f B=" __TIME__,
       statebuf, phi * 180.0 / pi, trim_x * 180.0 / pi, trim_y * 180.0 / pi, trim_z * 180.0 / pi,
       whe_est_1.omega_w, whe_est_2.omega_w, whe_est_3.omega_w, att_est.a_mag, a_dev_max,
       land.peak_omega, land.peak_dev, fuse_total > 0 ? 100 * fuse_count / fuse_total : 0,
@@ -371,11 +371,15 @@ void controller() {
   if(!flag_arm) {
     att_est.pin_yaw(qt0, qt1, qt2, qt3);
   } else {
-    // While armed, leak the unobservable yaw toward the reference with a slow
-    // time constant: absorbs secular gyro bias drift (which otherwise walks
-    // phi into the error limit over long sessions) without disturbing real
-    // yaw dynamics or the spin trajectory, whose timescales are much faster
-    att_est.pin_yaw_partial(qt0, qt1, qt2, qt3, dt / yaw_leak_tau);
+    // While armed, leak the unobservable yaw toward the reference: absorbs
+    // gyro bias drift and keeps the standing yaw error (and with it the
+    // yaw torque injected into common-mode wheel momentum) tiny. Paused
+    // while the trajectory commands rotation so it cannot absorb the
+    // commanded pirouette.
+    float orm_leak = abs(att_tra.omega_r_x) + abs(att_tra.omega_r_y) + abs(att_tra.omega_r_z);
+    if(orm_leak < 0.01) {
+      att_est.pin_yaw_partial(qt0, qt1, qt2, qt3, dt / yaw_leak_tau);
+    }
   }
 
   // Fusion duty diagnostics for the beacon
@@ -595,6 +599,16 @@ void controller() {
     tau_1 = cont.tau_1;
     tau_2 = cont.tau_2;
     tau_3 = cont.tau_3;
+
+    // Drain the common-mode wheel momentum through the ground: an equal
+    // deceleration on all three wheels whose yaw reaction is absorbed by the
+    // corner's static friction. Without this, any residual yaw torque
+    // (leak-equilibrium error, calibration dust) integrates into collective
+    // wheel speed forever - the controller itself deliberately never sees
+    // the common mode.
+    tau_1 -= k_cm_drain * omega_mean_c;
+    tau_2 -= k_cm_drain * omega_mean_c;
+    tau_3 -= k_cm_drain * omega_mean_c;
   } else {
     if(flag_spindown) {
       // Actively brake the wheels to rest instead of letting them freewheel
