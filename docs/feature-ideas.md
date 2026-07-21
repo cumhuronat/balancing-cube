@@ -27,6 +27,12 @@ Status legend: [ ] backlog · [~] in progress · [x] done
 
 ## Ambitious
 
+- [~] **10. Soft landing with edge catch** (added + built 2026-07-21): tap-tap
+  commands a controlled descent onto a face — verified base landing (peaks
+  4.4-5.1 rad/s vs 6.4 free-fall over 5+ runs), first successful mid-landing
+  edge-balance pause observed; iterating on hold duration and robustness
+  (settle-before-lean + no-progress bail shipped).
+
 - [ ] **8. Stand-up from lying flat** — no mechanical brakes, so the impulsive
   Cubli jump is out; resonant swing-up (rock on a face edge, pump energy each
   cycle, catch the edge balance) looks torque-feasible for face→edge.

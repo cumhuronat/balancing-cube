@@ -23,8 +23,9 @@ AttitudeEstimator::AttitudeEstimator(int pin_sda, int pin_scl) : imu(pin_sda, pi
     // lds at the arming instant
     lds_gain = lds_disarmed;
 
-    // Set initial accelerometer magnitude
+    // Set initial accelerometer magnitude and fusion flag
     a_mag = 0.0;
+    fused = false;
 }
 
 // Initializer
@@ -84,7 +85,9 @@ void AttitudeEstimator::estimate() {
     // Only fuse the accelerometer when it plausibly measures gravity; during
     // swings or free fall its direction lies and would corrupt the estimate
     a_mag = sqrt(ax * ax + ay * ay + az * az);
+    fused = false;
     if(a_mag >= acc_fuse_lo && a_mag <= acc_fuse_hi) {
+        fused = true;
         // Normalize linear acceleration
         ax /= a_mag;
         ay /= a_mag;
@@ -105,6 +108,11 @@ void AttitudeEstimator::estimate() {
 // Pin the unobservable yaw onto the reference quaternion
 void AttitudeEstimator::pin_yaw(float r0, float r1, float r2, float r3) {
     quat_pin_yaw(r0, r1, r2, r3, q0, q1, q2, q3);
+}
+
+// Partially pin the unobservable yaw toward the reference (armed leak)
+void AttitudeEstimator::pin_yaw_partial(float r0, float r1, float r2, float r3, float frac) {
+    quat_pin_yaw_partial(r0, r1, r2, r3, q0, q1, q2, q3, frac);
 }
 
 // Set the accelerometer correction gain

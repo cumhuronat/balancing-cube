@@ -73,9 +73,19 @@ const float lds_disarmed = 10; // Accelerometer correction gain while disarmed
 const float omega_still = 0.3; // Maximum gyro magnitude that counts as "held still" (rad/s)
 const float acc_arm_lo = 0.9 * g; // Accelerometer magnitude window for arming (m/s^2)
 const float acc_arm_hi = 1.1 * g;
-const float acc_fuse_lo = 0.85 * g; // Accelerometer magnitude window for fusing the correction step (m/s^2)
-const float acc_fuse_hi = 1.15 * g;
+const float acc_fuse_lo = 0.5 * g; // Accelerometer magnitude window for fusing the correction step (m/s^2).
+const float acc_fuse_hi = 1.5 * g; // Broad on purpose: the Gibbs clamp already guards the singularity, and a
+                                   // tight window starves tilt correction during hard balancing wobble.
 const int arm_dwell = 50; // Consecutive qualifying cycles required to arm (50 cycles = 0.2 s)
+
+// Armed-phase estimator safeguards. The yaw leak slowly absorbs secular gyro
+// bias drift in the unobservable yaw (time constant yaw_leak_tau); the
+// attitude watchdog force-terminates when a clean gravity measurement
+// disagrees with the estimate for att_sane_cycles (a fallen cube must never
+// keep its motors energized because the estimator went blind).
+const float yaw_leak_tau = 15.0; // Yaw leak time constant while armed (s)
+const float att_sane_ang = 45.0 * pi / 180.0; // Estimate-vs-gravity disagreement threshold (rad). Below the corner-to-face geometry (54.7 deg) so a face-fall with a blind estimator trips it; healthy estimator error is a few degrees.
+const int att_sane_cycles = 125; // Sustained disagreement cycles before forced terminate (0.5 s)
 
 // Wheel spin-down: after a disarm or terminate the wheels are braked to rest
 // instead of freewheeling for tens of seconds
@@ -97,6 +107,10 @@ const bool status_while_armed = true;
 // signature of a center-of-mass mismatch and is slowly bled into a body-frame
 // trim of the reference quaternion (learned value persisted in flash)
 const float trim_rate = 3e-6; // Trim integrator rate (rad trim per rad wheel angle per s)
+const float trim_quiet_acc = 0.5; // Adapt trim only when |a_mag - g| is below this (m/s^2):
+                                  // wide-window fusion during wobble biases the estimate, and the
+                                  // trim must never learn that bias into the reference
+const float trim_quiet_omega = 0.5; // Adapt trim only below this body rate (rad/s)
 const float trim_max = 3.0 * pi / 180.0; // Trim clamp (rad)
 const float phi_quiet = 8.0 * pi / 180.0; // Adapt only below this error angle (rad)
 

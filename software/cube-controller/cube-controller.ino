@@ -97,6 +97,11 @@ Preferences prefs;
 // Trimmed reference quaternion (trajectory reference with the trim composed)
 float qt0 = 1, qt1 = 0, qt2 = 0, qt3 = 0;
 
+// Armed-phase attitude watchdog and fusion diagnostics
+unsigned int att_sane_count = 0;
+unsigned int fuse_count = 0;
+unsigned int fuse_total = 0;
+
 // Torques
 float tau_1 = 0, tau_2 = 0, tau_3 = 0;
 
@@ -242,11 +247,13 @@ void loop() {
     }
     char buf[220];
     snprintf(buf, sizeof(buf),
-      "S=%s PHI=%.2f TRIM=%.3f,%.3f,%.3f W=%.1f,%.1f,%.1f AM=%.2f DEV=%.1f TAPS=%u LAND=%.1f,%.1f",
+      "S=%s PHI=%.2f TRIM=%.3f,%.3f,%.3f W=%.1f,%.1f,%.1f AM=%.2f DEV=%.1f TAPS=%u LAND=%.1f,%.1f FUSE=%u",
       statebuf, phi * 180.0 / pi, trim_x * 180.0 / pi, trim_y * 180.0 / pi, trim_z * 180.0 / pi,
       whe_est_1.omega_w, whe_est_2.omega_w, whe_est_3.omega_w, att_est.a_mag, a_dev_max, tap_edges,
-      land.peak_omega, land.peak_dev);
+      land.peak_omega, land.peak_dev, fuse_total > 0 ? 100 * fuse_count / fuse_total : 0);
     a_dev_max = 0;
+    fuse_count = 0;
+    fuse_total = 0;
     status_udp.beginPacket("255.255.255.255", 47269);
     status_udp.write((uint8_t*) buf, strlen(buf));
     status_udp.endPacket();
@@ -273,6 +280,40 @@ void controller() {
   // cube arms at any heading
   if(!flag_arm) {
     att_est.pin_yaw(qt0, qt1, qt2, qt3);
+  } else {
+    // While armed, leak the unobservable yaw toward the reference with a slow
+    // time constant: absorbs secular gyro bias drift (which otherwise walks
+    // phi into the error limit over long sessions) without disturbing real
+    // yaw dynamics or the spin trajectory, whose timescales are much faster
+    att_est.pin_yaw_partial(qt0, qt1, qt2, qt3, dt / yaw_leak_tau);
+  }
+
+  // Fusion duty diagnostics for the beacon
+  fuse_total++;
+  if(att_est.fused) {
+    fuse_count++;
+  }
+
+  // Armed attitude watchdog: if a clean gravity measurement disagrees with
+  // the estimated up direction for att_sane_cycles, the estimator is blind -
+  // force a terminate so a fallen cube can never keep its motors energized
+  if(flag_arm) {
+    bool clean = att_est.a_mag >= acc_arm_lo && att_est.a_mag <= acc_arm_hi;
+    if(clean) {
+      float ux, uy, uz;
+      quat_body_up(att_est.q0, att_est.q1, att_est.q2, att_est.q3, ux, uy, uz);
+      float ang = vec3_angle(att_est.ax(), att_est.ay(), att_est.az(), ux, uy, uz);
+      att_sane_count = ang > att_sane_ang ? att_sane_count + 1 : 0;
+    }
+    if(att_sane_count > (unsigned int) att_sane_cycles) {
+      flag_arm = false;
+      flag_terminate = true;
+      flag_spindown = true;
+      att_sane_count = 0;
+      att_est.set_correction_gain(lds_disarmed);
+    }
+  } else {
+    att_sane_count = 0;
   }
 
   // Calculate rotation quaternion error (against the trimmed reference)
@@ -421,7 +462,10 @@ void controller() {
     // center-of-mass mismatch; removing the mean leaves the tilt-relevant
     // components and keeps the reference yaw untouched.
     float omega_r_mag = abs(att_tra.omega_r_x) + abs(att_tra.omega_r_y) + abs(att_tra.omega_r_z);
-    if(abs(phi) < phi_quiet && omega_r_mag < 0.01) {
+    float omega_mag_t = sqrt(att_est.omega_x * att_est.omega_x + att_est.omega_y * att_est.omega_y +
+      att_est.omega_z * att_est.omega_z);
+    if(abs(phi) < phi_quiet && omega_r_mag < 0.01 && abs(att_est.a_mag - g) < trim_quiet_acc &&
+      omega_mag_t < trim_quiet_omega) {
       float theta_mean = (whe_est_1.theta_w + whe_est_2.theta_w + whe_est_3.theta_w) / 3.0;
       trim_x -= trim_rate * dt * (whe_est_1.theta_w - theta_mean);
       trim_y -= trim_rate * dt * (whe_est_2.theta_w - theta_mean);

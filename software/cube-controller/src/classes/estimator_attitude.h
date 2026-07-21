@@ -27,6 +27,10 @@ class AttitudeEstimator {
         float omega_x, omega_y, omega_z;
         // Magnitude of the last accelerometer reading (m/s^2)
         float a_mag;
+        // Whether the last estimate step fused the accelerometer
+        bool fused;
+        // Partially pin the unobservable yaw toward the reference (armed leak)
+        void pin_yaw_partial(float r0, float r1, float r2, float r3, float frac);
         // Get acceleration and gyroscope values directly from IMU
         float ax(), ay(), az(), gx(), gy(), gz();
 

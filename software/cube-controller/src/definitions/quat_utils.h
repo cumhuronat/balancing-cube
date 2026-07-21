@@ -157,6 +157,34 @@ static inline void quat_compose_body(float q0, float q1, float q2, float q3,
     o3 /= n;
 }
 
+// Partially pin the world-yaw of q toward the yaw orbit of the reference qu:
+// applies fraction frac (0..1) of the optimal twist that quat_pin_yaw would
+// apply in full. Used while armed as a slow leak that absorbs secular gyro
+// bias drift in the unobservable yaw without disturbing genuine yaw dynamics.
+// Returns false (q untouched) when degenerate.
+static inline bool quat_pin_yaw_partial(float qu0, float qu1, float qu2, float qu3,
+        float& q0, float& q1, float& q2, float& q3, float frac) {
+    float c = q0 * qu0 + q1 * qu1 + q2 * qu2 + q3 * qu3;
+    float s = -q0 * qu3 - q1 * qu2 + q2 * qu1 + q3 * qu0;
+    float n = sqrtf(c * c + s * s);
+    if (n < 0.5f) {
+        return false;
+    }
+    float half = frac * atan2f(-s, c);
+    float w = cosf(half);
+    float z = sinf(half);
+    float p0 = w * q0 - z * q3;
+    float p1 = w * q1 - z * q2;
+    float p2 = w * q2 + z * q1;
+    float p3 = w * q3 + z * q0;
+    float pn = sqrtf(p0 * p0 + p1 * p1 + p2 * p2 + p3 * p3);
+    q0 = p0 / pn;
+    q1 = p1 / pn;
+    q2 = p2 / pn;
+    q3 = p3 / pn;
+    return true;
+}
+
 // Body-frame "up" direction implied by the attitude quaternion: the third
 // row of R(q). Shared by the landing phase machine and the host tests.
 static inline void quat_body_up(float q0, float q1, float q2, float q3,

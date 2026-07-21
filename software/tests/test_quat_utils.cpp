@@ -292,6 +292,39 @@ static void test_vec3_clamp_norm() {
     expect(a == a0 && b == b0 && c == c0, "under-limit vector is untouched");
 }
 
+
+// --- quat_pin_yaw_partial tests (armed yaw leak) ---
+
+static void test_pin_yaw_partial() {
+    float half = acosf(sqrtf(3.0f) / 3.0f) / 2.0f;
+    Quat qu = {cosf(half), sqrtf(2.0f) / 2.0f * sinf(half), -sqrtf(2.0f) / 2.0f * sinf(half), 0.0f};
+    for (int trial = 0; trial < 25; trial++) {
+        Quat q = qnorm(qmul(qz(0.3f + 0.4f * frand()), qmul(qu, qrand_angle(0.1f))));
+        // frac = 1 must equal the full pin
+        float a0=q.w,a1=q.x,a2=q.y,a3=q.z, b0=q.w,b1=q.x,b2=q.y,b3=q.z;
+        quat_pin_yaw(qu.w,qu.x,qu.y,qu.z, a0,a1,a2,a3);
+        quat_pin_yaw_partial(qu.w,qu.x,qu.y,qu.z, b0,b1,b2,b3, 1.0f);
+        expect(fabsf(a0-b0)+fabsf(a1-b1)+fabsf(a2-b2)+fabsf(a3-b3) < 1e-4f,
+            "partial pin with frac=1 equals the full pin");
+        // frac = 0 is identity
+        float c0=q.w,c1=q.x,c2=q.y,c3=q.z;
+        quat_pin_yaw_partial(qu.w,qu.x,qu.y,qu.z, c0,c1,c2,c3, 0.0f);
+        expect(fabsf(c0-q.w)+fabsf(c1-q.x)+fabsf(c2-q.y)+fabsf(c3-q.z) < 1e-5f,
+            "partial pin with frac=0 is the identity");
+        // small frac reduces the yaw error and preserves body-up
+        float d0=q.w,d1=q.x,d2=q.y,d3=q.z;
+        quat_pin_yaw_partial(qu.w,qu.x,qu.y,qu.z, d0,d1,d2,d3, 0.1f);
+        float u0[3], u1[3];
+        body_up(q, u0);
+        body_up({d0,d1,d2,d3}, u1);
+        expect(u0[0]*u1[0]+u0[1]*u1[1]+u0[2]*u1[2] > 0.99999f,
+            "partial pin leaves body-up unchanged");
+        float e_before = err_angle(q, qu);
+        float e_after = err_angle({d0,d1,d2,d3}, qu);
+        expect(e_after < e_before + 1e-6f, "partial pin never increases the error");
+    }
+}
+
 int main() {
     test_from_accel_matches_gravity();
     test_from_accel_degenerate_upside_down();
@@ -300,6 +333,7 @@ int main() {
     test_correct_antipode_basin_documented();
     test_correct_singular_guard();
     test_pin_yaw();
+    test_pin_yaw_partial();
     test_pin_yaw_double_cover();
     test_pin_yaw_guard();
     test_compose_body_matches_qmul();
