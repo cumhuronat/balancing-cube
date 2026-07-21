@@ -26,7 +26,8 @@ class LandingController {
         bool use_balance_controller;
         // Governor torques (Nm) for phases L1/L2
         float tau_1, tau_2, tau_3;
-        // Phase (0 = lean, 1 = corner descent, 2 = edge descent, 3 = touched down)
+        // Phase (0 lean, 1 corner descent, 2 edge catch, 3 edge hold,
+        // 4 face descent, 5 touched down)
         int phase;
         // Terminal flags: exactly one becomes true
         bool done, aborted;
@@ -37,6 +38,11 @@ class LandingController {
         // Rate governor: desired body rates -> wheel torques (same torque
         // mapping and gyroscopic terms as the balance controller)
         void governor(float ref_x, float ref_y, float ref_z,
+            float omega_x, float omega_y, float omega_z,
+            float omega_w1, float omega_w2, float omega_w3);
+        // Map linearized inputs to clamped wheel torques, including the
+        // wheel-gyroscopic compensation (shared by the governor and the hold)
+        void apply_u(float u_1, float u_2, float u_3,
             float omega_x, float omega_y, float omega_z,
             float omega_w1, float omega_w2, float omega_w3);
         // Cycles spent in the current phase

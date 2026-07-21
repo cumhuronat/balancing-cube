@@ -57,10 +57,10 @@ void LandingController::update(float q0, float q1, float q2, float q3,
     }
 
     // Aborts (any phase): body rate above free-fall touchdown, wheel
-    // overspeed, or a descent-phase timeout. The caller falls back to plain
-    // spin-down. (An L0 timeout instead proceeds to L1 below: if the lean
-    // alone has not tipped the cube, the governor drives the descent.)
-    bool timeout = phase != 0 && cycles > (unsigned int) land_t12_max;
+    // overspeed, or a phase timeout. The caller falls back to plain
+    // spin-down. (An L0 timeout instead proceeds to L1; the catch and hold
+    // have their own exits below.)
+    bool timeout = (phase == 1 || phase == 4) && cycles > (unsigned int) land_t12_max;
     if(omega_mag > omega_land_abort ||
         fabsf(omega_w1) > omega_w_abort || fabsf(omega_w2) > omega_w_abort ||
         fabsf(omega_w3) > omega_w_abort || timeout) {
@@ -100,8 +100,10 @@ void LandingController::update(float q0, float q1, float q2, float q3,
     }
 
     if(phase == 1) {
-        // L1: rate-governed descent about the corner->edge axis
-        governor(omega_d1 * descent_x, omega_d1 * descent_y, omega_d1 * descent_z,
+        // L1: rate-governed descent about the corner->edge axis; near the
+        // edge the target drops to zero (full braking into the contact)
+        float target = ang_edge <= brake_zero_ang ? 0.0 : omega_d1;
+        governor(target * descent_x, target * descent_y, target * descent_z,
             omega_x, omega_y, omega_z, omega_w1, omega_w2, omega_w3);
 
         // Edge reached: waypoint proximity, or a gated contact spike
@@ -113,12 +115,56 @@ void LandingController::update(float q0, float q1, float q2, float q3,
     }
 
     if(phase == 2) {
-        // L2: single-axis descent about -x (wheels 2/3 damp their axes)
+        // Catch: the edge contact has dumped the momentum perpendicular to
+        // the edge line; brake the remainder to rest on all axes
+        governor(0.0, 0.0, 0.0, omega_x, omega_y, omega_z, omega_w1, omega_w2, omega_w3);
+
+        if(omega_mag <= catch_ok && ang_edge <= ang_hold_enter) {
+            // Near rest on the edge: begin the balanced hold
+            phase = 3;
+            cycles = 0;
+        } else if(ang_face <= ang_past_edge) {
+            // Overshot the edge toward the face: continue as a face descent
+            phase = 4;
+            cycles = 0;
+        } else if(cycles > (unsigned int) catch_max) {
+            // Could not settle and did not progress: give up safely
+            aborted = true;
+            tau_1 = tau_2 = tau_3 = 0.0;
+        }
+        return;
+    }
+
+    if(phase == 3) {
+        // Hold: single-wheel edge balance about body x. beta_face is the
+        // signed tilt from the edge toward the face (beta_face_dot = -omega_x)
+        float beta_face = 0.25 * pi - atan2f(uy, uz);
+        float u_1 = kp_edge * beta_face - kd_edge * omega_x;
+        float u_2 = kg_land * (0.0 - omega_y);
+        float u_3 = kg_land * (0.0 - omega_z);
+        apply_u(u_1, u_2, u_3, omega_x, omega_y, omega_z, omega_w1, omega_w2, omega_w3);
+
+        if(beta_face < -hold_back_bail || omega_mag > omega_hold_max) {
+            // Falling backward off the edge (or shoved): the face-descent
+            // governor cannot help there - abort straight to spin-down
+            aborted = true;
+            tau_1 = tau_2 = tau_3 = 0.0;
+        } else if(beta_face > hold_bail || cycles > (unsigned int) hold_cycles) {
+            // Pause complete (or tipped past the capture region toward the
+            // face): bow down onto the face
+            phase = 4;
+            cycles = 0;
+        }
+        return;
+    }
+
+    if(phase == 4) {
+        // Face descent: single-axis governor about -x (wheels 2/3 damp)
         governor(-omega_d2, 0.0, 0.0, omega_x, omega_y, omega_z, omega_w1, omega_w2, omega_w3);
 
         // Face reached: touchdown
         if(ang_face <= ang_face_hit || (a_dev > land_contact && ang_face <= ang_spike_gate)) {
-            phase = 3;
+            phase = 5;
             done = true;
             tau_1 = tau_2 = tau_3 = 0.0;
         }
@@ -135,7 +181,16 @@ void LandingController::governor(float ref_x, float ref_y, float ref_z,
     float u_1 = kg_land * (ref_x - omega_x);
     float u_2 = kg_land * (ref_y - omega_y);
     float u_3 = kg_land * (ref_z - omega_z);
+    apply_u(u_1, u_2, u_3, omega_x, omega_y, omega_z, omega_w1, omega_w2, omega_w3);
+}
 
+// Map linearized inputs to clamped wheel torques. The wheel-gyroscopic
+// compensation is load-bearing during the hold: wheels 2/3 may still carry
+// hundreds of rad/s from the catch, and their momentum couples into the
+// held axis whenever the body moves.
+void LandingController::apply_u(float u_1, float u_2, float u_3,
+        float omega_x, float omega_y, float omega_z,
+        float omega_w1, float omega_w2, float omega_w3) {
     tau_1 = -I_w_xx * (omega_w3 * omega_y - omega_w2 * omega_z) - I_c_xx_bar * u_1 - I_c_xy_bar * (u_2 + u_3);
     tau_2 = -I_w_xx * (omega_w1 * omega_z - omega_w3 * omega_x) - I_c_xx_bar * u_2 - I_c_xy_bar * (u_1 + u_3);
     tau_3 = -I_w_xx * (omega_w2 * omega_x - omega_w1 * omega_y) - I_c_xx_bar * u_3 - I_c_xy_bar * (u_1 + u_2);

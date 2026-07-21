@@ -80,22 +80,76 @@ int main() {
     expect(fabsf(lc.tau_1) <= tau_land_max + 1e-6f && fabsf(lc.tau_2) <= tau_land_max + 1e-6f &&
         fabsf(lc.tau_3) <= tau_land_max + 1e-6f, "governor torques respect the clamp");
 
-    // --- L1 -> L2 at the edge waypoint ---
+    // --- L1 -> CATCH at the edge waypoint ---
     q_from_up(0, E, E, q0, q1, q2, q3);
-    lc.update(q0, q1, q2, q3, 1.0f*DX, 1.0f*DY, 1.0f*DZ, 1.0f, 0, 0, 0);
-    expect(lc.phase == 2, "edge waypoint enters L2");
+    lc.update(q0, q1, q2, q3, 3.0f*DX, 3.0f*DY, 3.0f*DZ, 20.0f, 0, 0, 0);
+    expect(lc.phase == 2, "edge waypoint enters the catch");
 
-    // --- L2: single-axis descent about -x; touchdown at the face ---
+    // Catch brakes toward rest while still moving
+    lc.update(q0, q1, q2, q3, 2.0f*DX, 2.0f*DY, 2.0f*DZ, 1.0f, 0, 0, 0);
+    float rdot = (-lc.tau_1)*DX + (-lc.tau_2)*DY + (-lc.tau_3)*DZ;
+    expect(rdot < -1e-4f, "catch brakes the residual rotation");
+
+    // Near rest at the edge: hold begins
+    lc.update(q0, q1, q2, q3, 0.2f*DX, 0.2f*DY, 0.2f*DZ, 0.5f, 0, 0, 0);
+    expect(lc.phase == 3, "settled catch enters the hold");
+
+    // --- HOLD: single-wheel edge balance ---
+    // Tipped toward the face (beta_face > 0): wheel-1 torque must be negative
+    // (body reaction +x pushes back toward the edge)
+    float hx, hy, hz;
+    slerp_dir(0, E, E, 0, 0, 1, 4.0f * (float)M_PI / 180.0f, hx, hy, hz);
+    q_from_up(hx, hy, hz, q0, q1, q2, q3);
+    lc.update(q0, q1, q2, q3, 0, 0, 0, 0.5f, 0, 0, 0);
+    expect(lc.phase == 3, "hold persists inside the capture region");
+    expect(lc.tau_1 < -1e-4f, "hold pushes back toward the edge when tipped to the face");
+
+    // Gyroscopic compensation: wheel-3 momentum + body y-rate couples into
+    // wheel 1; the difference with wheels stopped must equal -I_w_xx*w3*wy
+    q_from_up(0, E, E, q0, q1, q2, q3);
+    lc.update(q0, q1, q2, q3, 0, 0.2f, 0, 0.5f, 0, 0, 0);
+    float t1_still = lc.tau_1;
+    lc.update(q0, q1, q2, q3, 0, 0.2f, 0, 0.5f, 0, 0, 400.0f);
+    float dgyro = lc.tau_1 - t1_still;
+    expect(fabsf(dgyro - (-I_w_xx * 400.0f * 0.2f)) < 1e-4f,
+        "hold compensates wheel gyroscopic coupling");
+
+    // Backward fall (about the edge toward the -y face, beta_face < 0)
+    // aborts straight to spin-down
+    slerp_dir(0, E, E, 0, 1, 0, 5.0f * (float)M_PI / 180.0f, hx, hy, hz);
+    q_from_up(hx, hy, hz, q0, q1, q2, q3);
+    lc.update(q0, q1, q2, q3, 0.5f, 0, 0, 0.5f, 0, 0, 0);
+    expect(lc.aborted && !lc.done, "backward fall from the hold aborts");
+
+    // Fresh hold: completing the pause bows to the face descent
+    lc.start();
+    lc.phase = 3;
+    q_from_up(0, E, E, q0, q1, q2, q3);
+    for (int i = 0; i <= hold_cycles + 1; i++) {
+        lc.update(q0, q1, q2, q3, 0, 0, 0, 0.5f, 0, 0, 0);
+    }
+    expect(lc.phase == 4 && !lc.aborted, "completed hold enters the face descent");
+
+    // --- Face descent about -x; touchdown ---
     lc.update(q0, q1, q2, q3, -omega_d2, 0, 0, 1.0f, 0, 0, 0);
-    expect(fabsf(lc.tau_1) < 1e-3f, "on-target L2 rate commands ~zero wheel-1 torque");
+    expect(fabsf(lc.tau_1) < 1e-3f, "on-target face-descent rate commands ~zero wheel-1 torque");
     lc.update(q0, q1, q2, q3, -3.0f, 0, 0, 1.0f, 0, 0, 0);
-    expect(-lc.tau_1 * (-1.0f) < -1e-4f, "too-fast L2 descent is braked about -x");
+    expect(-lc.tau_1 * (-1.0f) < -1e-4f, "too-fast face descent is braked about -x");
 
     q_from_up(0, 0, 1, q0, q1, q2, q3);
     lc.update(q0, q1, q2, q3, -1.0f, 0, 0, 2.0f, 0, 0, 0);
-    expect(lc.phase == 3 && lc.done && !lc.aborted, "face waypoint is touchdown");
+    expect(lc.phase == 5 && lc.done && !lc.aborted, "face waypoint is touchdown");
     expect(lc.tau_1 == 0.0f && lc.tau_2 == 0.0f && lc.tau_3 == 0.0f, "touchdown zeroes torques");
     expect(lc.peak_omega >= 3.0f && lc.peak_dev >= 2.0f, "landing stats recorded");
+
+    // Catch timeout aborts (never settles, never progresses)
+    lc.start();
+    lc.phase = 2;
+    q_from_up(0, E, E, q0, q1, q2, q3);
+    for (int i = 0; i <= catch_max + 1; i++) {
+        lc.update(q0, q1, q2, q3, 2.0f*DX, 2.0f*DY, 2.0f*DZ, 1.0f, 0, 0, 0);
+    }
+    expect(lc.aborted, "catch that cannot settle aborts");
 
     // --- Aborts ---
     lc.start();

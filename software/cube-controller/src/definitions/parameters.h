@@ -115,7 +115,23 @@ const float omega_land_abort = 8.0; // Body-rate abort, above the 6.4 rad/s free
 const float omega_w_abort = 600.0; // Defensive wheel-overspeed abort (rad/s)
 const float tau_land_max = 0.9 * Km * ia_max; // Governor torque clamp (Nm)
 const int land_t0_max = 375; // L0 timeout in cycles (1.5 s): hand over to the governor
-const int land_t12_max = 500; // L1/L2 timeout in cycles (2 s): abort
+const int land_t12_max = 500; // Descent-phase timeout in cycles (2 s): abort
+
+// Edge catch and hold (landing increment 2). The capture region of the
+// single-wheel edge balance is +-8 deg (saturation tilt of one wheel against
+// gravity about the edge); the catch gate keeps entry speeds stoppable
+// inside it.
+const float kp_edge = 150.0; // Edge-hold proportional gain (threshold is ~76 s^-2)
+const float kd_edge = 15.0; // Edge-hold damping gain
+const float brake_zero_ang = 15.0 * pi / 180.0; // Below this edge distance L1 brakes toward zero rate (rad)
+const float catch_ok = 1.2; // Maximum body rate to enter the hold (rad/s)
+const float ang_hold_enter = 6.0 * pi / 180.0; // Maximum edge distance to enter the hold (rad)
+const float ang_past_edge = 37.0 * pi / 180.0; // Face distance meaning the edge was overshot (rad)
+const float hold_bail = 8.0 * pi / 180.0; // Forward tilt ending the hold into the face descent (rad)
+const float hold_back_bail = 4.0 * pi / 180.0; // Backward tilt aborting to spin-down (rad)
+const float omega_hold_max = 3.0; // Body rate aborting the hold (rad/s)
+const int catch_max = 75; // Catch settle window in cycles (0.3 s)
+const int hold_cycles = 375; // Nominal balanced-pause duration in cycles (1.5 s)
 
 // Controller gains. These must be re-tuned if your cube has different dynamics (weights, inertias, dimensions, etc.)
 const float kp = 300;
