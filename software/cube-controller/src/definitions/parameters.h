@@ -6,18 +6,18 @@ const float f = 250;
 const float dt = 1 / f;
 const unsigned int dt_us = dt * 1e6;
 
-// IMU gyroscope offsets
-const float b_gyr_x = 0.74;
-const float b_gyr_y = 0.66;
-const float b_gyr_z = -0.45;
+// IMU gyroscope offsets (this unit, derived from six-pose telemetry 2026-07-21)
+const float b_gyr_x = -1.04;
+const float b_gyr_y = -1.20;
+const float b_gyr_z = -0.81;
 
-// IMU accelerator offsets and gains
-const float b_acc_x = -6;
-const float b_acc_y = -215;
-const float b_acc_z = 161;
-const float f_acc_x = 1672.7;
-const float f_acc_y = 1673.3;
-const float f_acc_z = 1691.5;
+// IMU accelerator offsets and gains (this unit, AN-1057 six-pose procedure 2026-07-21)
+const float b_acc_x = -60.4;
+const float b_acc_y = -383.5;
+const float b_acc_z = -132.1;
+const float f_acc_x = 1674.5;
+const float f_acc_y = 1671.4;
+const float f_acc_z = 1681.5;
 
 // Physical parameters
 const float pi = 3.14159265359;
