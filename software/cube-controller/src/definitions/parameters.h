@@ -131,6 +131,9 @@ const float hold_bail = 8.0 * pi / 180.0; // Forward tilt ending the hold into t
 const float hold_back_bail = 4.0 * pi / 180.0; // Backward tilt aborting to spin-down (rad)
 const float omega_hold_max = 3.0; // Body rate aborting the hold (rad/s)
 const int catch_max = 75; // Catch settle window in cycles (0.3 s)
+const float lean_quiet = 0.4; // Body rate below which the pre-lean settle completes (rad/s)
+const int lean_settle = 50; // Consecutive quiet cycles required before leaning (0.2 s)
+const int progress_stall = 125; // Cycles without waypoint progress before bailing (0.5 s)
 const int hold_cycles = 375; // Nominal balanced-pause duration in cycles (1.5 s)
 
 // Controller gains. These must be re-tuned if your cube has different dynamics (weights, inertias, dimensions, etc.)

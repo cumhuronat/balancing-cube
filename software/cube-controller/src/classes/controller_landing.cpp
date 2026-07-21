@@ -21,6 +21,9 @@ LandingController::LandingController() {
     peak_omega = 0.0;
     peak_dev = 0.0;
     cycles = 0;
+    quiet = 0;
+    best_ang = 10.0;
+    stall = 0;
 }
 
 // Enter phase L0
@@ -34,6 +37,9 @@ void LandingController::start() {
     peak_omega = 0.0;
     peak_dev = 0.0;
     cycles = 0;
+    quiet = 0;
+    best_ang = 10.0;
+    stall = 0;
 }
 
 // One control cycle
@@ -78,8 +84,21 @@ void LandingController::update(float q0, float q1, float q2, float q3,
     float ang_face = vec3_angle(ux, uy, uz, up_face_x, up_face_y, up_face_z);
 
     if(phase == 0) {
-        // L0: grow the body-frame lean along the descent axis; the caller
-        // balances against the leaned reference
+        // L0: first hold plain balance until the tap transient has died
+        // (leaning out of a disturbed state makes the tip direction
+        // unpredictable), then grow the body-frame lean along the descent axis
+        if(quiet < (unsigned int) lean_settle) {
+            quiet = omega_mag < lean_quiet ? quiet + 1 : 0;
+            lean_x = lean_y = lean_z = 0.0;
+            if(cycles <= (unsigned int) land_t0_max) {
+                return;
+            }
+            // Never settled inside the window: give up while still upright
+            aborted = true;
+            use_balance_controller = false;
+            tau_1 = tau_2 = tau_3 = 0.0;
+            return;
+        }
         float lean = lean_rate * dt * cycles;
         if(lean > lean_cap) {
             lean = lean_cap;
@@ -105,6 +124,17 @@ void LandingController::update(float q0, float q1, float q2, float q3,
         float target = ang_edge <= brake_zero_ang ? 0.0 : omega_d1;
         governor(target * descent_x, target * descent_y, target * descent_z,
             omega_x, omega_y, omega_z, omega_w1, omega_w2, omega_w3);
+
+        // No-progress bail: if the edge is not getting closer the fall has
+        // left the descent plane and the governor cannot bring it back
+        if(ang_edge < best_ang - 0.01) {
+            best_ang = ang_edge;
+            stall = 0;
+        } else if(++stall > (unsigned int) progress_stall) {
+            aborted = true;
+            tau_1 = tau_2 = tau_3 = 0.0;
+            return;
+        }
 
         // Edge reached: waypoint proximity, or a gated contact spike
         if(ang_edge <= ang_edge_hit || (a_dev > land_contact && ang_edge <= ang_spike_gate)) {

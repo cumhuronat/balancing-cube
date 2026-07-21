@@ -47,6 +47,11 @@ class LandingController {
             float omega_w1, float omega_w2, float omega_w3);
         // Cycles spent in the current phase
         unsigned int cycles;
+        // Pre-lean settle counter (L0 waits for the tap transient to die)
+        unsigned int quiet;
+        // No-progress bail tracking for the descent phases
+        float best_ang;
+        unsigned int stall;
 };
 
 #endif
