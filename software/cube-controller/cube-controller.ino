@@ -14,6 +14,7 @@
   // Libraries related to wireless functionality
   #include <WiFi.h>
   #include <WebServer.h>
+  #include <DNSServer.h>
   #include <ESPmDNS.h>
   #include <WiFiUdp.h>
   #include <ArduinoOTA.h>
@@ -23,9 +24,16 @@
 #include "src/cube-controller.h"
 
 #if OTA
-  // WiFi settings
+  // Optional compile-time WiFi seed. Real credentials live in flash (NVS),
+  // configured through the captive portal; if NVS is empty and these are not
+  // placeholders they are migrated into NVS once at boot.
   const char* wifi_ssid = "YOUR_SSID";
   const char* wifi_password = "YOUR_PASSWORD";
+
+  // Provisioning access point (raised when there are no saved credentials or
+  // the saved network stays unreachable; also an OTA lifeline at 192.168.4.1)
+  const char* ap_ssid = "Cube-Setup";
+  const char* ap_pass = "cube12345";
 #endif
 
 // Instantiation of objects
@@ -55,6 +63,21 @@ TickTwo timer_led(control_led, 200, 0, MILLIS);
   // Command receiver socket and the control web page
   WiFiUDP cmd_udp;
   WebServer web(80);
+
+  // Captive-portal DNS and WiFi provisioning state
+  DNSServer dns;
+  bool ap_active = false;
+  unsigned int sta_fail_ticks = 0;
+  unsigned int ap_teardown_ticks = 0;
+  String nvs_ssid, nvs_pass;
+
+  void start_ap();
+  void handle_wifi_page();
+  void handle_wifi_scan();
+  void handle_wifi_save();
+  void handle_wifi_status();
+  void handle_wifi_forget();
+  void handle_notfound();
 
   void handle_root();
   void handle_stop();
@@ -149,19 +172,44 @@ void setup() {
   spin_enabled = prefs.getBool("spin", true);
 
   #if OTA
-    // Start the WiFi connection in the background. OTA is brought up by the
-    // OTA timer callback once the connection is established, so WiFi never
-    // delays the boot sequence.
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(wifi_ssid, wifi_password);
+    // WiFi credentials live in flash; migrate the compile-time seed once if
+    // flash is empty and the seed is not a placeholder
+    nvs_ssid = prefs.getString("wssid", "");
+    nvs_pass = prefs.getString("wpass", "");
+    // The literal "YOUR_SSID" placeholder is load-bearing: it marks the
+    // compiled-in seed as absent
+    if(nvs_ssid.length() == 0 && strcmp(wifi_ssid, "YOUR_SSID") != 0) {
+      nvs_ssid = wifi_ssid;
+      nvs_pass = wifi_password;
+      prefs.putString("wssid", nvs_ssid);
+      prefs.putString("wpass", nvs_pass);
+    }
 
-    // Command receiver ("STOP" / "LAND" as UDP payloads) and the web page
+    // Start the WiFi connection in the background (OTA is brought up by the
+    // OTA timer callback once a network is up, so WiFi never delays boot).
+    // With no saved credentials, raise the provisioning access point now;
+    // otherwise the OTA timer raises it if the saved network stays
+    // unreachable.
+    if(nvs_ssid.length() > 0) {
+      WiFi.mode(WIFI_STA);
+      WiFi.begin(nvs_ssid.c_str(), nvs_pass.c_str());
+    } else {
+      start_ap();
+    }
+
+    // Command receiver ("STOP" / "LAND" as UDP payloads) and the web pages
     cmd_udp.begin(47270);
     web.on("/", handle_root);
     web.on("/stop", handle_stop);
     web.on("/land", handle_land);
     web.on("/spin", handle_spin);
     web.on("/status", handle_status);
+    web.on("/wifi", handle_wifi_page);
+    web.on("/wifi/scan", handle_wifi_scan);
+    web.on("/wifi/save", HTTP_POST, handle_wifi_save);
+    web.on("/wifi/status", handle_wifi_status);
+    web.on("/wifi/forget", handle_wifi_forget);
+    web.onNotFound(handle_notfound);
     web.begin();
     ArduinoOTA.setHostname("Cube ESP32");
 
@@ -223,6 +271,9 @@ void loop() {
     timer_ota.update();
     timer_status.update();
     web.handleClient();
+    if(ap_active) {
+      dns.processNextRequest();
+    }
     if(cmd_udp.parsePacket() > 0) {
       char cbuf[8];
       int n = cmd_udp.read(cbuf, 7);
@@ -259,8 +310,36 @@ void loop() {
   unsigned int ota_ticks = 0;
 
   void handle_ota(){
+    // WiFi provisioning state machine (5 s cadence). If the saved network
+    // stays unreachable, raise the provisioning AP (and keep retrying the
+    // saved network every 30 s: a rebooted router self-heals). Once the
+    // station connects, tear the AP down after a minute of grace.
+    // Radio reconfiguration blocks the cooperative loop for up to ~150 ms,
+    // so every blocking WiFi operation is gated on the motors being off
+    // (same invariant as the ArduinoOTA.begin gate). Note the >= : the
+    // trigger tick may pass while armed, and the AP must still be raised on
+    // the first disarmed tick after it.
+    bool wifi_ops_ok = !flag_arm && !flag_landing;
+    if(WiFi.status() != WL_CONNECTED) {
+      sta_fail_ticks++;
+      if(sta_fail_ticks >= 4 && !ap_active && wifi_ops_ok) {
+        start_ap();
+      }
+      if(nvs_ssid.length() > 0 && sta_fail_ticks % 6 == 0 && wifi_ops_ok) {
+        WiFi.begin(nvs_ssid.c_str(), nvs_pass.c_str());
+      }
+    } else {
+      sta_fail_ticks = 0;
+      if(ap_active && ++ap_teardown_ticks >= 12) {
+        dns.stop();
+        WiFi.softAPdisconnect(true);
+        WiFi.mode(WIFI_STA);
+        ap_active = false;
+      }
+    }
+
     if(!ota_started) {
-      if(WiFi.status() != WL_CONNECTED) {
+      if(WiFi.status() != WL_CONNECTED && !ap_active) {
         // One-time notice after roughly a minute without a connection
         if(++ota_ticks == 12) {
           Serial.println("WiFi not connected; OTA unavailable.");
@@ -281,6 +360,125 @@ void loop() {
 #endif
 
 #if OTA
+  void start_ap() {
+    // Keep the station side alive so the saved network can still connect
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP(ap_ssid, ap_pass);
+    dns.start(53, "*", WiFi.softAPIP());
+    ap_active = true;
+    ap_teardown_ticks = 0;
+    Serial.print("Provisioning AP up at ");
+    Serial.println(WiFi.softAPIP());
+  }
+
+  void handle_wifi_page() {
+    web.send(200, "text/html",
+      "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+      "<title>Cube WiFi</title><style>body{font-family:sans-serif;background:#111;color:#eee;margin:1em}"
+      "li{margin:0.3em 0;cursor:pointer;padding:0.5em;background:#222;border-radius:8px;list-style:none}"
+      "input{font-size:1.2em;width:95%;margin:0.3em 0;padding:0.5em}"
+      "button{font-size:1.2em;padding:0.6em 1.2em;border-radius:8px;border:none;background:#2e7d32;color:#fff}"
+      "#fg{background:#c62828;margin-top:2em}</style></head><body><h2>Cube WiFi setup</h2>"
+      "<div id='nets'>Scanning...</div>"
+      "<form onsubmit='return sv(event)'><input id='ssid' placeholder='Network name'>"
+      "<input id='pw' type='password' placeholder='Password'><br><button>Save &amp; connect</button></form>"
+      "<div id='res'></div><button id='fg' onclick=\"if(confirm('Forget saved WiFi?'))fetch('/wifi/forget')\">Forget WiFi</button>"
+      "<script>async function scan(){let r=await(await fetch('/wifi/scan')).text();"
+      "if(r=='scanning'){setTimeout(scan,1000);return}"
+      "document.getElementById('nets').innerHTML='<ul>'+r.trim().split('\\n').filter(x=>x)"
+      ".map(l=>{let p=l.split('|');return \"<li onclick=\\\"document.getElementById('ssid').value='\"+p[0]+\"'\\\">\"+p[0]+' ('+p[1]+' dBm)</li>'}).join('')+'</ul>'}"
+      "scan();"
+      "async function sv(e){e.preventDefault();let b=new URLSearchParams();"
+      "b.append('ssid',document.getElementById('ssid').value);b.append('pass',document.getElementById('pw').value);"
+      "await fetch('/wifi/save',{method:'POST',body:b});poll();return false}"
+      "async function poll(){let t=await(await fetch('/wifi/status')).text();document.getElementById('res').textContent=t;"
+      "if(!t.startsWith('connected'))setTimeout(poll,2000)}</script></body></html>");
+  }
+
+  void handle_wifi_scan() {
+    if(flag_arm) {
+      web.send(200, "text/plain", "stop the cube before scanning");
+      return;
+    }
+    int n = WiFi.scanComplete();
+    if(n == WIFI_SCAN_FAILED) {
+      WiFi.scanNetworks(true);
+      web.send(200, "text/plain", "scanning");
+      return;
+    }
+    if(n == WIFI_SCAN_RUNNING) {
+      web.send(200, "text/plain", "scanning");
+      return;
+    }
+    String out = "";
+    for(int i = 0; i < n && i < 20; i++) {
+      // Strip characters that would break the list markup or the field
+      // separator; exotic SSIDs can still be typed manually
+      String ssid = WiFi.SSID(i);
+      ssid.replace("|", " ");
+      ssid.replace("'", " ");
+      ssid.replace("\"", " ");
+      ssid.replace("<", " ");
+      ssid.replace(">", " ");
+      ssid.replace("&", " ");
+      out += ssid + "|" + String(WiFi.RSSI(i)) + "\n";
+    }
+    WiFi.scanDelete();
+    web.send(200, "text/plain", out);
+  }
+
+  void handle_wifi_save() {
+    // Provisioning requires the cube at rest: NVS writes and WiFi.begin
+    // both block the cooperative control loop
+    if(flag_arm || flag_landing || flag_spindown) {
+      web.send(200, "text/plain", "stop the cube first, then save again");
+      return;
+    }
+    nvs_ssid = web.arg("ssid");
+    nvs_pass = web.arg("pass");
+    prefs.putString("wssid", nvs_ssid);
+    prefs.putString("wpass", nvs_pass);
+    WiFi.begin(nvs_ssid.c_str(), nvs_pass.c_str());
+    sta_fail_ticks = 0;
+    web.send(200, "text/plain", "trying");
+  }
+
+  void handle_wifi_status() {
+    if(WiFi.status() == WL_CONNECTED) {
+      web.send(200, "text/plain", "connected: " + WiFi.localIP().toString());
+    } else {
+      web.send(200, "text/plain", "connecting to " + nvs_ssid + "...");
+    }
+  }
+
+  void handle_wifi_forget() {
+    // Provisioning requires the cube at rest (see handle_wifi_save)
+    if(flag_arm || flag_landing || flag_spindown) {
+      web.send(200, "text/plain", "stop the cube first, then forget again");
+      return;
+    }
+    prefs.putString("wssid", "");
+    prefs.putString("wpass", "");
+    nvs_ssid = "";
+    nvs_pass = "";
+    WiFi.disconnect();
+    if(!ap_active) {
+      start_ap();
+    }
+    web.send(200, "text/plain", "forgotten; join Cube-Setup to reconfigure");
+  }
+
+  void handle_notfound() {
+    if(ap_active) {
+      // Captive portal: any unknown URL (including the iOS connectivity
+      // probes) redirects to the setup page, which pops the sheet
+      web.sendHeader("Location", "http://" + WiFi.softAPIP().toString() + "/wifi");
+      web.send(302, "text/plain", "");
+    } else {
+      web.send(404, "text/plain", "not found");
+    }
+  }
+
   void handle_root() {
     web.send(200, "text/html",
       "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -291,6 +489,7 @@ void loop() {
       "<div><button id='stop' onclick=\"fetch('/stop')\">STOP</button></div>"
       "<div><button id='land' onclick=\"fetch('/land')\">LAND</button></div>"
       "<div><button id='spin' onclick=\"fetch('/spin')\" style='background:#6a1b9a;color:#fff'>SPIN ON/OFF</button></div>"
+      "<div style='margin-top:1.5em'><a href='/wifi' style='color:#90caf9'>WiFi settings</a></div>"
       "<script>setInterval(async()=>{try{document.getElementById('st').textContent="
       "await(await fetch('/status')).text()}catch(e){}},1000)</script></body></html>");
   }
