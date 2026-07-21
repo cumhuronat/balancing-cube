@@ -1,6 +1,10 @@
 #ifndef parameters_h
 #define parameters_h
 
+// Math functions are used in the constant expressions below; include math.h
+// directly so this header does not depend on Arduino.h being included first
+#include <math.h>
+
 // System frequencies and periods
 const float f = 250;
 const float dt = 1 / f;
@@ -95,6 +99,23 @@ const bool status_while_armed = true;
 const float trim_rate = 3e-6; // Trim integrator rate (rad trim per rad wheel angle per s)
 const float trim_max = 3.0 * pi / 180.0; // Trim clamp (rad)
 const float phi_quiet = 8.0 * pi / 180.0; // Adapt only below this error angle (rad)
+
+// Soft landing
+const float kg_land = 10.0; // Rate-governor gain (saturates the clamp at ~1 rad/s of rate error)
+const float omega_d1 = 1.5; // Target descent rate, corner->edge phase (rad/s)
+const float omega_d2 = 1.2; // Target descent rate, edge->face phase (rad/s)
+const float lean_rate = 3.0 * pi / 180.0; // L0 reference lean ramp (rad/s)
+const float lean_cap = 10.0 * pi / 180.0; // Maximum L0 reference lean (rad)
+const float lean_engage = 6.0 * pi / 180.0; // Up-vector departure that starts the descent (rad)
+const float ang_edge_hit = 8.0 * pi / 180.0; // Edge waypoint proximity ending L1 (rad)
+const float ang_face_hit = 10.0 * pi / 180.0; // Face waypoint proximity ending L2 (rad)
+const float ang_spike_gate = 15.0 * pi / 180.0; // Contact spikes only count this close to a waypoint (rad)
+const float land_contact = 6.0; // Accel deviation registering as ground contact (m/s^2); descent dynamics alone reach 3-4
+const float omega_land_abort = 8.0; // Body-rate abort, above the 6.4 rad/s free-fall touchdown (rad/s)
+const float omega_w_abort = 600.0; // Defensive wheel-overspeed abort (rad/s)
+const float tau_land_max = 0.9 * Km * ia_max; // Governor torque clamp (Nm)
+const int land_t0_max = 375; // L0 timeout in cycles (1.5 s): hand over to the governor
+const int land_t12_max = 500; // L1/L2 timeout in cycles (2 s): abort
 
 // Controller gains. These must be re-tuned if your cube has different dynamics (weights, inertias, dimensions, etc.)
 const float kp = 300;

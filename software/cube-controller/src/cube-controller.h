@@ -13,3 +13,4 @@
 #include "classes/estimator_attitude.h"
 #include "classes/controller_attitude_wheel.h"
 #include "classes/trajectory_attitude.h"
+#include "classes/controller_landing.h"

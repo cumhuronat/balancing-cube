@@ -157,6 +157,28 @@ static inline void quat_compose_body(float q0, float q1, float q2, float q3,
     o3 /= n;
 }
 
+// Body-frame "up" direction implied by the attitude quaternion: the third
+// row of R(q). Shared by the landing phase machine and the host tests.
+static inline void quat_body_up(float q0, float q1, float q2, float q3,
+        float& ux, float& uy, float& uz) {
+    ux = 2.0f * (q1 * q3 - q0 * q2);
+    uy = 2.0f * (q2 * q3 + q0 * q1);
+    uz = q0 * q0 - q1 * q1 - q2 * q2 + q3 * q3;
+}
+
+// Angle (rad) between two 3-vectors (need not be normalized); clamped acos
+static inline float vec3_angle(float ax, float ay, float az,
+        float bx, float by, float bz) {
+    float na = sqrtf(ax * ax + ay * ay + az * az);
+    float nb = sqrtf(bx * bx + by * by + bz * bz);
+    if (na < 1e-9f || nb < 1e-9f) {
+        return 0.0f;
+    }
+    float c = (ax * bx + ay * by + az * bz) / (na * nb);
+    if (c > 1.0f) { c = 1.0f; } else if (c < -1.0f) { c = -1.0f; }
+    return acosf(c);
+}
+
 // Clamp the norm of a 3-vector in place (used to bound the auto-trim angle)
 static inline void vec3_clamp_norm(float& x, float& y, float& z, float max_norm) {
     float n = sqrtf(x * x + y * y + z * z);

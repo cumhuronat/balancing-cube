@@ -33,6 +33,7 @@ WheelEstimator whe_est_1(M1_SPEED), whe_est_2(M2_SPEED), whe_est_3(M3_SPEED);
 AttitudeEstimator att_est(IMU_SDA, IMU_SCL);
 AttitudeWheelController cont(USE_NONLINEAR_CONTROLLER);
 AttitudeTrajectory att_tra;
+LandingController land;
 
 // Run cube controller at the frequency as specified in parameter file
 void controller();
@@ -73,6 +74,9 @@ unsigned int arm_counter = 0;
 
 // Wheel spin-down state (braking the wheels to rest after disarm or terminate)
 bool flag_spindown = false;
+
+// Soft-landing state (controlled descent onto a face after a tap)
+bool flag_landing = false;
 
 // Tap-to-disarm detection state
 unsigned int tap_last = 65535; // Cycles since the last registered spike
@@ -124,6 +128,8 @@ void setup() {
     // off: the upload blocks the control loop for its whole duration
     ArduinoOTA.onStart([]() {
       flag_arm = false;
+      flag_landing = false;
+      flag_spindown = false;
       flag_terminate = true;
       flag_tra = true;
       att_est.set_correction_gain(lds_disarmed);
@@ -225,12 +231,21 @@ void loop() {
       return;
     }
 
-    // One-line state summary: T terminated, A armed, S spinning down, R ready
-    char state = flag_terminate ? 'T' : (flag_arm ? 'A' : (flag_spindown ? 'S' : 'R'));
-    char buf[200];
-    snprintf(buf, sizeof(buf), "S=%c PHI=%.2f TRIM=%.3f,%.3f,%.3f W=%.1f,%.1f,%.1f AM=%.2f DEV=%.1f TAPS=%u",
-      state, phi * 180.0 / pi, trim_x * 180.0 / pi, trim_y * 180.0 / pi, trim_z * 180.0 / pi,
-      whe_est_1.omega_w, whe_est_2.omega_w, whe_est_3.omega_w, att_est.a_mag, a_dev_max, tap_edges);
+    // One-line state summary: T terminated, A armed, L<phase> landing,
+    // S spinning down, R ready
+    char statebuf[4];
+    if(flag_landing) {
+      snprintf(statebuf, sizeof(statebuf), "L%d", land.phase);
+    } else {
+      statebuf[0] = flag_terminate ? 'T' : (flag_arm ? 'A' : (flag_spindown ? 'S' : 'R'));
+      statebuf[1] = 0;
+    }
+    char buf[220];
+    snprintf(buf, sizeof(buf),
+      "S=%s PHI=%.2f TRIM=%.3f,%.3f,%.3f W=%.1f,%.1f,%.1f AM=%.2f DEV=%.1f TAPS=%u LAND=%.1f,%.1f",
+      statebuf, phi * 180.0 / pi, trim_x * 180.0 / pi, trim_y * 180.0 / pi, trim_z * 180.0 / pi,
+      whe_est_1.omega_w, whe_est_2.omega_w, whe_est_3.omega_w, att_est.a_mag, a_dev_max, tap_edges,
+      land.peak_omega, land.peak_dev);
     a_dev_max = 0;
     status_udp.beginPacket("255.255.255.255", 47269);
     status_udp.write((uint8_t*) buf, strlen(buf));
@@ -295,20 +310,14 @@ void controller() {
   if(flag_arm) {
     if(spike_edge && tap_last > (unsigned int) tap_refract) {
       if(tap_count > 0 && tap_last <= (unsigned int) tap_window) {
-        // Second tap inside the window: graceful disarm, then restore the
-        // full pre-arm state so the cube can arm again without a reset
+        // Second tap inside the window: soft landing. The landing
+        // controller lowers the cube onto a face; the pre-arm state is
+        // restored when the landing ends. The estimator keeps the slow
+        // balancing gain during the descent.
         flag_arm = false;
-        flag_spindown = true;
+        flag_landing = true;
+        land.start();
         tap_count = 0;
-        phi_lim = phi_min;
-        arm_counter = 0;
-        att_est.set_correction_gain(lds_disarmed);
-        flag_tra = false;
-        att_tra.reset();
-
-        // Persist the learned balance-point trim once the wheels are at
-        // rest (deferred: flash writes block the control loop)
-        trim_save_pending = true;
       } else {
         tap_count = 1;
       }
@@ -325,7 +334,7 @@ void controller() {
   // plausible gravity reading, for arm_dwell consecutive cycles. This
   // prevents arming while the cube is still being handled, which would slam
   // the motors to saturation in the user's hand.
-  if(!flag_arm && !flag_terminate && !flag_spindown) {
+  if(!flag_arm && !flag_terminate && !flag_spindown && !flag_landing) {
     float omega_mag = sqrt(att_est.omega_x * att_est.omega_x + att_est.omega_y * att_est.omega_y +
       att_est.omega_z * att_est.omega_z);
     if(abs(phi) <= phi_lim && omega_mag <= omega_still && att_est.a_mag >= acc_arm_lo &&
@@ -340,9 +349,49 @@ void controller() {
   // cycles, and stays engaged while the error is within phi_lim. Exceeding
   // phi_lim once armed disables the controller until the chip is reset.
   bool engage = flag_arm ? (abs(phi) <= phi_lim) : (arm_counter >= arm_dwell && !flag_terminate &&
-    !flag_spindown);
+    !flag_spindown && !flag_landing);
 
-  if(engage) {
+  if(flag_landing) {
+    // Soft landing: the phase machine decides between balance control (L0
+    // lean) and the descent rate governor (L1/L2). Yaw pinning above stays
+    // active (it never changes body-up, and it keeps the L0 yaw error zero).
+    land.update(att_est.q0, att_est.q1, att_est.q2, att_est.q3,
+      att_est.omega_x, att_est.omega_y, att_est.omega_z, abs(att_est.a_mag - g),
+      whe_est_1.omega_w, whe_est_2.omega_w, whe_est_3.omega_w);
+
+    if(land.use_balance_controller) {
+      // L0: balance against the leaned reference (static reference, zero
+      // reference rates)
+      float ql0, ql1, ql2, ql3;
+      quat_compose_body(qt0, qt1, qt2, qt3, land.lean_x, land.lean_y, land.lean_z, ql0, ql1, ql2, ql3);
+      cont.control(ql0, ql1, ql2, ql3, att_est.q0, att_est.q1, att_est.q2, att_est.q3,
+        0.0, 0.0, 0.0, att_est.omega_x, att_est.omega_y, att_est.omega_z,
+        0.0, 0.0, 0.0, whe_est_1.theta_w, whe_est_2.theta_w, whe_est_3.theta_w,
+        whe_est_1.omega_w, whe_est_2.omega_w, whe_est_3.omega_w);
+      tau_1 = cont.tau_1;
+      tau_2 = cont.tau_2;
+      tau_3 = cont.tau_3;
+    } else {
+      tau_1 = land.tau_1;
+      tau_2 = land.tau_2;
+      tau_3 = land.tau_3;
+    }
+
+    // Landing ended (touchdown or abort): restore the pre-arm state and
+    // brake the wheels to rest; the cube returns to ready either way
+    if(land.done || land.aborted) {
+      flag_landing = false;
+      flag_spindown = true;
+      phi_lim = phi_min;
+      arm_counter = 0;
+      att_est.set_correction_gain(lds_disarmed);
+      flag_tra = false;
+      att_tra.reset();
+
+      // Persist the learned balance-point trim once the wheels are at rest
+      trim_save_pending = true;
+    }
+  } else if(engage) {
     if(!flag_arm) {
       // Arming instant: widen the error limit, revert to the balancing
       // estimator gain and discard wheel angle accumulated from hall bias
@@ -436,7 +485,15 @@ void controller() {
 }
 
 void control_led() {
-  if(flag_spindown) {
+  if(flag_landing) {
+    // Controlled descent in progress: blink blue
+    if(led_status) {
+      neopixelWrite(RGB_BUILTIN, 0, 0, 255);
+    } else {
+      digitalWrite(RGB_BUILTIN, LOW);
+    }
+    led_status = !led_status;
+  } else if(flag_spindown) {
     // Wheels are being braked to rest: blink so a spinning cube never shows
     // a "safe" solid state (green after a tap-disarm, red after a terminate)
     if(led_status) {
